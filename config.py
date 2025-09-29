@@ -1,0 +1,70 @@
+import os
+from typing import Dict, List, Optional
+
+BOT_TOKEN: Optional[str] = None
+
+VIRUS_BOT_USERNAME = "@virus_play_bot"
+WEBAPP_URL = "https://virusgift.pro"
+GRAPHQL_URL = "https://virusgift.pro/api/graphql/query"
+ROULETTE_URL = "https://virusgift.pro/roulette"
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1',
+    'Accept': 'application/json',
+    'Content-Type': 'application/json',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'cross-site'
+}
+
+
+HIGH_VALUE_THRESHOLD = 200
+
+SESSIONS_DIR = "./sessions"
+LOG_CHAT_ID: Optional[int] = None
+
+# Конфигурация для работы с 500+ аккаунтами (ОПТИМИЗИРОВАНО ДЛЯ СКОРОСТИ)
+MAX_CONCURRENT_SESSIONS = 50  # Увеличено для максимальной производительности
+REQUESTS_PER_MINUTE = 30  # Увеличено для быстрой обработки
+DELAY_BETWEEN_ACCOUNTS = 1  # Минимальная задержка для скорости
+
+# Дополнительные таймауты для массовой обработки (ОПТИМИЗИРОВАНЫ ДЛЯ СКОРОСТИ)
+HTTP_REQUEST_TIMEOUT = 30  # Сокращено для быстрого отклика
+TELEGRAM_CONNECT_TIMEOUT = 30  # Сокращено для быстрого отклика
+MIN_REQUEST_INTERVAL = 1  # Минимальный интервал для максимальной скорости
+SUBSCRIPTION_DELAY = 2  # Сокращено для быстроты
+PRIZE_ACTIVATION_DELAY = 0.5  # Минимальная задержка
+ONBOARDING_RETRY_DELAY = 1  # Сокращено для быстроты
+
+# Настройки автоматических платных спинов
+AUTO_SPIN_THRESHOLD = 200  # Минимальный баланс звезд для автоспина
+AUTO_SPIN_CHECK_INTERVAL = 300  # Интервал проверки баланса (5 минут)
+AUTO_SPIN_ENABLED = True  # Включить автоматические платные спины
+
+# Настройки автоматической продажи подарков
+AUTO_GIFT_EXCHANGE_ENABLED = True  # Включить автопродажу подарков
+AUTO_GIFT_EXCHANGE_THRESHOLD = 200  # Автопродажа подарков ≤200 звезд
+GIFT_EXCHANGE_AFTER_SPIN = True  # Продавать подарки после каждого спина
+GIFT_EXCHANGE_ON_BALANCE_CHECK = True  # Продавать подарки при проверке баланса
+
+# Настройки кэширования и производительности (МАКСИМАЛЬНО ОПТИМИЗИРОВАНО)
+INVENTORY_CACHE_ENABLED = True  # Включить кэширование инвентаря
+INVENTORY_CACHE_TTL = 180  # Увеличено время жизни кэша (3 минуты)
+BATCH_INVENTORY_REQUESTS = True  # Батчинг запросов инвентаря
+HTTP_CONNECTION_POOL_SIZE = 100  # Увеличен размер пула для производительности
+REDUCED_LOGGING_MODE = True  # Уменьшенное логирование для производительности
+
+# Новые настройки кэширования для максимальной производительности
+BALANCE_CACHE_ENABLED = True  # Кэширование балансов для скорости
+BALANCE_CACHE_TTL = 120  # Время жизни кэша балансов (2 минуты)
+SESSION_VALIDATION_CACHE_TTL = 300  # Кэш валидации сессий (5 минут)
+USER_DATA_CACHE_TTL = 600  # Кэш данных пользователей (10 минут)
+VALIDATION_SEMAPHORE_LIMIT = 15  # Увеличено для параллельной валидации
+PERFORMANCE_MODE = True  # Режим максимальной производительности
+
+# Настройки Telegram Bot API для стабильности
+TELEGRAM_READ_TIMEOUT = 60.0  # Время чтения ответов от Telegram API
+TELEGRAM_WRITE_TIMEOUT = 60.0  # Время отправки запросов к Telegram API
+TELEGRAM_CONNECT_TIMEOUT = 60.0  # Время подключения к Telegram API
+TELEGRAM_POOL_TIMEOUT = 30.0  # Время ожидания соединения из пула
