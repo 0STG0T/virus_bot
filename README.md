@@ -24,7 +24,7 @@
 
 ```bash
 # Клонируем проект
-git clone <repository_url>
+git clone 
 cd virus_bot
 
 # Устанавливаем зависимости
@@ -35,22 +35,10 @@ pip install -r requirements.txt
 
 Создайте файл `.env` с вашими данными:
 
-```bash
-# Telegram API (получить на https://my.telegram.org/apps)
-TG_API_ID=your_api_id
-TG_API_HASH=your_api_hash
-
-# Telegram Bot Token (получить у @BotFather)
-BOT_TOKEN=your_bot_token
-
-# ID чата для уведомлений (опционально)
-LOG_CHAT_ID=your_chat_id
-```
 
 ### 4. Подготовка сессий
 
 1. Поместите `.session` файлы ваших Telegram аккаунтов в папку `sessions/`
-2. Файлы должны быть названы по номеру телефона (например: `+1234567890.session`)
 
 ### 5. Запуск
 
