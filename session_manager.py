@@ -26,12 +26,12 @@ class SessionManager:
             os.makedirs(SESSIONS_DIR)
             return 0
 
-        session_files = [f for f in os.listdir(SESSIONS_DIR) if f.endswith('.session')]
+        session_files = [f for f in os.listdir(SESSIONS_DIR) if f.lower().endswith('.session')]
         loaded_count = 0
 
         for session_file in session_files:
             session_path = os.path.join(SESSIONS_DIR, session_file)
-            session_name = session_file.replace('.session', '')
+            session_name = session_file[:-8] if session_file.lower().endswith('.session') else session_file
 
             try:
                 # Для .session файлов Telethon используем путь к файлу напрямую
