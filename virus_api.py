@@ -461,12 +461,38 @@ class VirusAPI:
             # Обрабатываем GraphQL ошибки
             error = result['errors'][0] if result['errors'] else {}
             message = error.get('message', 'Неизвестная ошибка')
+            extensions = error.get('extensions', {})
+
+            logger.warning(f"⚠️ [{self.session_name}] GraphQL ошибка при спине:")
+            logger.warning(f"   📝 Message: {message}")
+            logger.warning(f"   🔧 Extensions: {extensions}")
 
             # Особая обработка ошибки подписки
-            if error.get('extensions', {}).get('code') == 'TELEGRAM_SUBSCRIPTION_REQUIRED':
-                channel_info = error.get('extensions', {})
+            if extensions.get('code') == 'TELEGRAM_SUBSCRIPTION_REQUIRED':
+                channel_info = extensions
                 channel_username = channel_info.get('username', 'неизвестный канал')
+                url = channel_info.get('url', 'нет ссылки')
+                logger.info(f"📡 [{self.session_name}] Требуется подписка на канал:")
+                logger.info(f"   📛 Username: @{channel_username}")
+                logger.info(f"   🔗 URL: {url}")
+                logger.info(f"   📦 Полные данные: {channel_info}")
                 return False, f"Требуется подписка на канал @{channel_username}", channel_info
+
+            # Особая обработка ошибки клика по тестовой ссылке
+            if extensions.get('code') == 'TEST_SPIN_URL_CLICK_REQUIRED':
+                test_url = extensions.get('link', '')
+                logger.info(f"🔗 [{self.session_name}] Требуется клик по тестовой ссылке:")
+                logger.info(f"   🌐 URL: {test_url}")
+                logger.info(f"   📦 Полные данные: {extensions}")
+                return False, f"Требуется клик по тестовой ссылке", extensions
+
+            # Проверяем сообщение об ошибке напрямую (для старых API)
+            if "You must click the url before attempting a test spin" in message:
+                logger.warning(f"🔗 [{self.session_name}] Обнаружена старая ошибка testSpin через message")
+                logger.warning(f"   📝 Полное сообщение: {message}")
+                logger.warning(f"   📦 Extensions (если есть): {extensions}")
+                # Возвращаем как ошибку клика, даже если нет ссылки в extensions
+                return False, f"Требуется клик по тестовой ссылке", extensions if extensions else {}
 
             return False, message, None
 
@@ -1529,6 +1555,42 @@ class VirusAPI:
             status['ready_for_automation'] = False
 
         return status
+
+    async def mark_test_spin_url_click(self, init_data: Optional[str] = None) -> Tuple[bool, str]:
+        """Выполняет markTestSpinUrlClick мутацию для регистрации клика по testSpin ссылке"""
+        query = """
+        mutation markTestSpinUrlClick($initData: String) {
+            markTestSpinUrlClick(initData: $initData) {
+                success
+                __typename
+            }
+        }
+        """
+
+        variables = {}
+        if init_data:
+            variables['initData'] = init_data
+
+        result = await self._make_graphql_request(query, variables, operation_name="markTestSpinUrlClick")
+
+        logger.debug(f"markTestSpinUrlClick response: {result}")
+
+        if result and 'data' in result and result['data'] and 'markTestSpinUrlClick' in result['data']:
+            click_data = result['data']['markTestSpinUrlClick']
+            if click_data.get('success'):
+                logger.info(f"✅ markTestSpinUrlClick выполнен успешно для {self.session_name}")
+                return True, "URL click marked successfully"
+            else:
+                logger.warning(f"⚠️ markTestSpinUrlClick вернул success=false для {self.session_name}")
+                return False, "API returned success=false"
+        elif result and 'errors' in result:
+            error = result['errors'][0] if result['errors'] else {}
+            message = error.get('message', 'Неизвестная ошибка')
+            logger.warning(f"⚠️ markTestSpinUrlClick не поддерживается или ошибка для {self.session_name}: {message}")
+            return False, f"GraphQL error: {message}"
+        else:
+            logger.error(f"❌ Неожиданный формат ответа markTestSpinUrlClick для {self.session_name}")
+            return False, "Unexpected response format"
 
     async def mark_test_spin_tunnel_click(self) -> Tuple[bool, str]:
         """Выполняет markTestSpinTonnelClick мутацию для прохождения tunnel onboarding"""

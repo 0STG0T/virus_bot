@@ -49,10 +49,50 @@ class SpinWorker:
             username = channel_info.get('username')
             url = channel_info.get('url')
 
+            # СНАЧАЛА пробуем по ссылке (важно для приватных каналов)
+            if url and 't.me/' in url:
+                try:
+                    logger.info(f"Подписываюсь по ссылке: {url}")
+
+                    # Проверяем тип ссылки
+                    if '/+' in url or '/joinchat/' in url:
+                        # Приватная ссылка-инвайт
+                        logger.info(f"Обнаружена приватная ссылка-инвайт")
+
+                        # Извлекаем хэш из ссылки
+                        # Формат: https://t.me/+HASH или https://t.me/joinchat/HASH
+                        if '/+' in url:
+                            invite_hash = url.split('/+')[1].split('?')[0]
+                        else:
+                            invite_hash = url.split('/joinchat/')[1].split('?')[0]
+
+                        logger.info(f"Инвайт хэш: {invite_hash}")
+
+                        # Импортируем функцию для присоединения по инвайту
+                        from telethon.tl.functions.messages import ImportChatInviteRequest
+
+                        # Присоединяемся по инвайт-ссылке
+                        result = await client(ImportChatInviteRequest(invite_hash))
+                        logger.info(f"Успешно присоединился по инвайт-ссылке: {result}")
+                        await asyncio.sleep(SUBSCRIPTION_DELAY)
+                        return True
+                    else:
+                        # Публичная ссылка типа t.me/channel_name
+                        channel_name = url.split('t.me/')[1].split('?')[0].split('/')[0]
+                        if channel_name.startswith('@'):
+                            entity = await client.get_entity(channel_name)
+                        else:
+                            entity = await client.get_entity(f"@{channel_name}")
+                        await client(JoinChannelRequest(entity))
+                        logger.info(f"Успешно подписался через публичную ссылку: {channel_name}")
+                        await asyncio.sleep(SUBSCRIPTION_DELAY)
+                        return True
+                except Exception as e:
+                    logger.error(f"Не удалось подписаться по ссылке {url}: {e}")
+
+            # Если ссылка не сработала, пробуем по username
             if username:
                 logger.info(f"Подписываюсь на канал @{username}")
-
-                # Пробуем найти канал по username
                 try:
                     entity = await client.get_entity(f"@{username}")
                     await client(JoinChannelRequest(entity))
@@ -61,16 +101,6 @@ class SpinWorker:
                     return True
                 except Exception as e:
                     logger.error(f"Не удалось подписаться на @{username}: {e}")
-
-            if url and 't.me/' in url:
-                # Пробуем подписаться по ссылке
-                try:
-                    # Извлекаем информацию из ссылки
-                    logger.info(f"Пытаюсь подписаться по ссылке: {url}")
-                    # TODO: Реализовать подписку по приватной ссылке
-                    return True
-                except Exception as e:
-                    logger.error(f"Не удалось подписаться по ссылке {url}: {e}")
 
             return False
 
@@ -138,36 +168,91 @@ class SpinWorker:
                     await client.disconnect()
                     return result
 
+            # === ОСНОВНАЯ ЛОГИКА ФРИ СПИНА ===
+            logger.info(f"🎰 [{session_name}] === НАЧАЛО ПРОЦЕССА ФРИ СПИНА ===")
+
+            # Попытка 1: Первый спин
+            logger.info(f"🎰 [{session_name}] Попытка #1: Выполняю первый спин...")
             spin_success, spin_message, reward = await api.perform_spin()
+            logger.info(f"📊 [{session_name}] Попытка #1 результат: success={spin_success}, message='{spin_message}', reward={reward}")
 
-            if not spin_success:
-                # Проверяем, требуется ли подписка на канал
-                if "Требуется подписка на канал" in spin_message and isinstance(reward, dict):
-                    logger.info(f"Требуется подписка на канал для {session_name}")
+            # Если спин неуспешен - пытаемся исправить и повторить до 3 раз
+            attempt = 1
+            while not spin_success and attempt < 4:
+                attempt += 1
+                logger.warning(f"⚠️ [{session_name}] Попытка #{attempt}: Спин неуспешен, анализирую ошибку...")
 
-                    # Попытаемся подписаться на канал
-                    subscription_success = await self.handle_subscription_requirement(client, reward)
+                handled = False
 
-                    if subscription_success:
-                        # Ждем больше времени для применения подписки при 500+ аккаунтах
-                        await asyncio.sleep(8)
-                        spin_success, spin_message, reward = await api.perform_spin()
+                # Обработка 1: Требуется клик по тестовой ссылке
+                if "Требуется клик по тестовой ссылке" in spin_message:
+                    logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Обнаружена ошибка 'Требуется клик по тестовой ссылке'")
 
-                        if not spin_success:
-                            result['message'] = f'нельзя сделать фри спин ({spin_message})'
-                            await api.close_session()
-                            await client.disconnect()
-                            return result
+                    if isinstance(reward, dict) and 'link' in reward:
+                        test_url = reward['link']
+                        logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Извлечена ссылка: {test_url}")
+                        logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Выполняю клик по ссылке и открытие WebApp...")
+
+                        click_success, init_data = await auth.click_test_spin_url(test_url)
+                        logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Клик завершен: {click_success}")
+
+                        if click_success:
+                            if init_data:
+                                logger.info(f"📡 [{session_name}] Попытка #{attempt}: Получен init_data от WebApp")
+                                logger.info(f"📝 [{session_name}] Попытка #{attempt}: Init data (первые 50 символов): {init_data[:50]}...")
+                            else:
+                                logger.info(f"ℹ️ [{session_name}] Попытка #{attempt}: WebApp открылся без init_data")
+
+                            logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Жду 5 секунд перед повторным спином...")
+                            await asyncio.sleep(5)
+                            logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после клика...")
+                            spin_success, spin_message, reward = await api.perform_spin()
+                            logger.info(f"📊 [{session_name}] Попытка #{attempt} результат: success={spin_success}, message='{spin_message}', reward={reward}")
+                            handled = True
+                        else:
+                            logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось выполнить клик")
                     else:
-                        result['message'] = f'нельзя сделать фри спин ({spin_message})'
-                        await api.close_session()
-                        await client.disconnect()
-                        return result
-                else:
-                    result['message'] = f'нельзя сделать фри спин ({spin_message})'
-                    await api.close_session()
-                    await client.disconnect()
-                    return result
+                        logger.error(f"❌ [{session_name}] Попытка #{attempt}: reward не содержит ссылку: {reward}")
+
+                # Обработка 2: Требуется подписка на канал
+                elif "Требуется подписка на канал" in spin_message:
+                    logger.info(f"📡 [{session_name}] Попытка #{attempt}: Обнаружена ошибка 'Требуется подписка на канал'")
+
+                    if isinstance(reward, dict):
+                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Данные подписки: {reward}")
+                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Выполняю подписку на канал...")
+
+                        subscription_success = await self.handle_subscription_requirement(client, reward)
+                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Подписка завершена: {subscription_success}")
+
+                        if subscription_success:
+                            logger.info(f"📡 [{session_name}] Попытка #{attempt}: Жду 8 секунд для применения подписки...")
+                            await asyncio.sleep(8)
+                            logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после подписки...")
+                            spin_success, spin_message, reward = await api.perform_spin()
+                            logger.info(f"📊 [{session_name}] Попытка #{attempt} результат: success={spin_success}, message='{spin_message}', reward={reward}")
+                            handled = True
+                        else:
+                            logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось подписаться на канал")
+                    else:
+                        logger.error(f"❌ [{session_name}] Попытка #{attempt}: reward не является dict: {reward}")
+
+                # Если ошибка не была обработана - выходим
+                if not handled:
+                    logger.error(f"❌ [{session_name}] Попытка #{attempt}: Ошибка не может быть обработана: '{spin_message}'")
+                    logger.error(f"❌ [{session_name}] Попытка #{attempt}: Прерываю цикл попыток")
+                    break
+
+            # Финальная проверка результата
+            if not spin_success:
+                logger.error(f"❌ [{session_name}] === ФИНАЛ: Спин неуспешен после {attempt} попыток ===")
+                logger.error(f"❌ [{session_name}] Финальная ошибка: '{spin_message}'")
+                result['message'] = f'нельзя сделать фри спин ({spin_message})'
+                await api.close_session()
+                await client.disconnect()
+                return result
+
+            logger.info(f"✅ [{session_name}] === УСПЕХ: Спин выполнен успешно! ===")
 
             if reward:
                 _, reward_desc, high_value, is_gift = await api.process_reward(reward)

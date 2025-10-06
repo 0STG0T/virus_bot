@@ -53,7 +53,7 @@ INVENTORY_CACHE_ENABLED = True  # Включить кэширование инв
 INVENTORY_CACHE_TTL = 180  # Увеличено время жизни кэша (3 минуты)
 BATCH_INVENTORY_REQUESTS = True  # Батчинг запросов инвентаря
 HTTP_CONNECTION_POOL_SIZE = 100  # Увеличен размер пула для производительности
-REDUCED_LOGGING_MODE = True  # Уменьшенное логирование для производительности
+REDUCED_LOGGING_MODE = False  # Уменьшенное логирование для производительности
 
 # Новые настройки кэширования для максимальной производительности
 BALANCE_CACHE_ENABLED = True  # Кэширование балансов для скорости
