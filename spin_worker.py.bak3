@@ -351,21 +351,13 @@ class SpinWorker:
 
         return result
 
-    async def perform_spins_batch(self, session_names: List[str], progress_callback=None) -> List[Dict]:
+    async def perform_spins_batch(self, session_names: List[str]) -> List[Dict]:
         # Убираем семафор - выполняем все спины параллельно без ограничений
         results = []
-        completed = [0]  # Счетчик завершенных операций
-        total = len(session_names)
 
         async def spin_without_limit(session_name: str):
             result = await self.perform_single_spin(session_name)
             await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
-
-            # Обновляем прогресс
-            completed[0] += 1
-            if progress_callback:
-                await progress_callback(completed[0], total)
-
             return result
 
         tasks = [spin_without_limit(name) for name in session_names]
@@ -446,7 +438,7 @@ class SpinWorker:
         results = []
 
         async def activate_stars_without_limit(session_name: str):
-            
+            async with semaphore:
                 result = {
                     'session_name': session_name,
                     'success': False,
@@ -488,13 +480,10 @@ class SpinWorker:
                     result['activated_count'] = activated_count
                     result['total_found'] = total_found
                     result['stars_value'] = stars_value
-                    if activated_count > 0:
+                    if stars_value > 0:
                         result['message'] = f'Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐)'
                     else:
-                        if total_found > 0:
-                            result['message'] = f'Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 (недостаточно для порога 200⭐)'
-                        else:
-                            result['message'] = 'Нет звезд в инвентаре для активации'
+                        result['message'] = f'Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 (недостаточно для порога 200⭐)'
 
                     await api.close_session()
                     await client.disconnect()
@@ -529,7 +518,7 @@ class SpinWorker:
         results = []
 
         async def paid_spin_without_limit(session_name: str):
-            
+            async with semaphore:
                 result = await self.perform_single_paid_spin(session_name)
                 await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
                 return result
@@ -671,7 +660,7 @@ class SpinWorker:
         results = []
 
         async def prepare_account_without_limit(session_name: str):
-            
+            async with semaphore:
                 result = await self.prepare_single_account(session_name)
                 await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
                 return result
@@ -757,41 +746,27 @@ class SpinWorker:
 
         return result
 
-    async def validate_all_accounts_batch(self, session_names: List[str], progress_callback=None) -> List[Dict]:
+    async def validate_all_accounts_batch(self, session_names: List[str]) -> List[Dict]:
         """Валидирует все аккаунты батчами"""
         logger.info(f"Начинаю валидацию {len(session_names)} аккаунтов")
 
         results = []
-        completed = [0]
-        total = len(session_names)
+        # Убираем семафор - все операции параллельно
 
         async def validate_single_account(session_name: str):
-            try:
-                result = await self.validate_single_account(session_name)
-                results.append(result)
-
-                # Обновляем прогресс
-                completed[0] += 1
-                if progress_callback:
-                    await progress_callback(completed[0], total)
-
-                return result
-            except Exception as e:
-                logger.error(f"Критическая ошибка валидации {session_name}: {e}")
-                error_result = {
-                    'session_name': session_name,
-                    'success': False,
-                    'message': f'Критическая ошибка: {str(e)}',
-                    'account_status': 'error'
-                }
-                results.append(error_result)
-
-                # Обновляем прогресс
-                completed[0] += 1
-                if progress_callback:
-                    await progress_callback(completed[0], total)
-
-                return error_result
+            async with semaphore:
+                try:
+                    result = await self.validate_single_account(session_name)
+                    results.append(result)
+                    return result
+                except Exception as e:
+                    logger.error(f"Критическая ошибка валидации {session_name}: {e}")
+                    results.append({
+                        'session_name': session_name,
+                        'success': False,
+                        'message': f'Критическая ошибка: {str(e)}',
+                        'account_status': 'error'
+                    })
 
         tasks = [validate_single_account(name) for name in session_names]
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -874,51 +849,39 @@ class SpinWorker:
 
         return result
 
-    async def check_all_balances_batch(self, session_names: List[str], batch_size: int = 20, progress_callback=None) -> List[Dict]:
+    async def check_all_balances_batch(self, session_names: List[str], batch_size: int = 20) -> List[Dict]:
         """Проверяет баланс всех аккаунтов супер-быстрыми батчами"""
         logger.info(f"БЫСТРАЯ проверка баланса {len(session_names)} аккаунтов (батчи по {batch_size})")
 
         all_results = []
-        completed = [0]
-        total = len(session_names)
 
         # Обрабатываем батчами для максимальной производительности
         for i in range(0, len(session_names), batch_size):
             batch = session_names[i:i + batch_size]
             batch_results = []
 
+            # Увеличенный семафор для максимальной скорости
+            # Убираем семафор - все операции параллельно
+
             async def check_single_balance_fast(session_name: str):
-                try:
-                    result = await self.check_single_account_balance(session_name)
-                    batch_results.append(result)
-
-                    # Обновляем прогресс
-                    completed[0] += 1
-                    if progress_callback:
-                        await progress_callback(completed[0], total)
-
-                    # Минимальная задержка только если нужно
-                    if DELAY_BETWEEN_ACCOUNTS > 0.1:
-                        await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
-                    return result
-                except Exception as e:
-                    logger.error(f"Ошибка быстрой проверки баланса {session_name}: {e}")
-                    error_result = {
-                        'session_name': session_name,
-                        'success': False,
-                        'message': f'Ошибка: {str(e)}',
-                        'stars_balance': 0,
-                        'balance': 0,
-                        'gifts_count': 0
-                    }
-                    batch_results.append(error_result)
-
-                    # Обновляем прогресс
-                    completed[0] += 1
-                    if progress_callback:
-                        await progress_callback(completed[0], total)
-
-                    return error_result
+                async with semaphore:
+                    try:
+                        result = await self.check_single_account_balance(session_name)
+                        batch_results.append(result)
+                        # Минимальная задержка только если нужно
+                        if DELAY_BETWEEN_ACCOUNTS > 0.1:
+                            await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
+                        return result
+                    except Exception as e:
+                        logger.error(f"Ошибка быстрой проверки баланса {session_name}: {e}")
+                        batch_results.append({
+                            'session_name': session_name,
+                            'success': False,
+                            'message': f'Ошибка: {str(e)}',
+                            'stars_balance': 0,
+                            'balance': 0,
+                            'gifts_count': 0
+                        })
 
             # Параллельная обработка батча
             tasks = [check_single_balance_fast(name) for name in batch]
@@ -1112,7 +1075,7 @@ class SpinWorker:
         # Убираем семафор - все операции параллельно
 
         async def perform_single_paid_spin_task(session_name: str):
-            
+            async with semaphore:
                 try:
                     result = await self.perform_single_paid_spin(session_name)
                     results.append(result)

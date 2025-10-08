@@ -861,10 +861,15 @@ class VirusAPI:
             return False, "Неожиданный формат ответа от API"
 
     async def activate_all_stars(self) -> Tuple[int, int]:
-        """Активирует все звезды из инвентаря. Возвращает (активировано, всего_найдено)"""
+        """
+        Активирует все звезды из инвентаря только если их сумма >= 200.
+        Возвращает (активировано, всего_найдено)
+        """
         activated_count = 0
         total_stars_found = 0
-        cursor = 0  # Начинаем с 0 как в DevTools
+        total_stars_value = 0
+        stars_to_activate = []  # Список звезд для активации
+        cursor = 0
 
         # Проверяем статус аккаунта перед активацией
         try:
@@ -875,20 +880,21 @@ class VirusAPI:
                 if account_status['onboarding_required']:
                     logger.warning(f"🔧 Аккаунт {self.session_name} требует ручного onboarding: {account_status['required_actions']}")
                     logger.info(f"Ошибка: {account_status['error_message']}")
-                    return 0, 0  # Возвращаем 0 звезд чтобы не пытаться активировать
+                    return 0, 0, 0
                 else:
                     logger.error(f"❌ Аккаунт {self.session_name} не готов к работе: {account_status['error_message']}")
-                    return 0, 0
+                    return 0, 0, 0
 
             logger.info(f"✅ Аккаунт {self.session_name} готов к активации звезд")
 
         except Exception as e:
             logger.warning(f"Ошибка проверки статуса аккаунта {self.session_name}: {e}")
-            # Продолжаем попытку активации в случае ошибки проверки
 
+        # ЭТАП 1: Собираем все звезды из инвентаря и считаем сумму
         try:
+            logger.info(f"🔍 Сканирую инвентарь для подсчета звезд для {self.session_name}...")
+
             while True:
-                # Получаем страницу инвентаря
                 inventory = await self.get_roulette_inventory(cursor=cursor)
                 if not inventory or not inventory.get('success'):
                     logger.warning(f"Не удалось получить инвентарь или success=false для {self.session_name}")
@@ -896,62 +902,86 @@ class VirusAPI:
 
                 prizes = inventory.get('prizes')
                 if not prizes:
-                    logger.info(f"Нет призов в инвентаре для {self.session_name}")
                     break
 
-                # Обрабатываем каждый приз
-                logger.debug(f"Обрабатываем {len(prizes)} призов на странице для {self.session_name}")
                 for prize_item in prizes:
-                    # Проверяем статус - только неактивированные призы (status: "NONE")
                     status = prize_item.get('status')
                     if status != 'NONE':
-                        logger.debug(f"Пропускаем приз с статусом {status}: {prize_item.get('name')}")
                         continue
 
-                    # Проверяем названия призов (и в корневом объекте, и в prize)
                     prize_name = prize_item.get('name', '').lower()
                     inner_prize = prize_item.get('prize', {})
                     inner_prize_name = inner_prize.get('name', '').lower()
 
-                    # Проверяем что это звезды и что их можно активировать
                     is_stars = ('stars' in prize_name or 'star' in prize_name or
                                'stars' in inner_prize_name or 'star' in inner_prize_name)
                     is_claimable = inner_prize.get('isClaimable', False)
 
-                    logger.debug(f"Проверяем приз: {prize_name or inner_prize_name} | is_stars={is_stars} | is_claimable={is_claimable}")
-
                     if is_stars and is_claimable:
-                        total_stars_found += 1
                         user_roulette_prize_id = prize_item.get('userRoulettePrizeId')
 
-                        logger.info(f"🌟 Найдены звезды для активации: {prize_name or inner_prize_name} (ID: {user_roulette_prize_id}) для {self.session_name}")
+                        # Пытаемся извлечь количество звезд из названия
+                        star_value = 0
+                        name_to_parse = inner_prize_name or prize_name
 
-                        if user_roulette_prize_id:
-                            success, message = await self.claim_roulette_prize(user_roulette_prize_id)
-                            if success:
-                                activated_count += 1
-                                logger.info(f"Активированы звезды: {prize_name or inner_prize_name} для {self.session_name}")
-                            else:
-                                logger.warning(f"Не удалось активировать звезды {prize_name or inner_prize_name} для {self.session_name}: {message}")
-                        else:
-                            logger.error(f"Нет userRoulettePrizeId для приза {prize_name or inner_prize_name}")
+                        # Ищем числа в названии типа "50 Stars", "100 stars"
+                        import re
+                        numbers = re.findall(r'\d+', name_to_parse)
+                        if numbers:
+                            star_value = int(numbers[0])
 
-                        await asyncio.sleep(PRIZE_ACTIVATION_DELAY)
+                        total_stars_found += 1
+                        total_stars_value += star_value
 
-                # Проверяем есть ли следующая страница
+                        stars_to_activate.append({
+                            'id': user_roulette_prize_id,
+                            'name': inner_prize_name or prize_name,
+                            'value': star_value
+                        })
+
+                        logger.debug(f"🌟 Найдены звезды: {name_to_parse} (значение: {star_value}) для {self.session_name}")
+
                 if not inventory.get('hasNextPage', False):
                     break
 
                 cursor = inventory.get('nextCursor')
                 if not cursor:
-                    logger.warning(f"hasNextPage=true но nextCursor пустой для {self.session_name}")
                     break
+
+        except Exception as e:
+            logger.error(f"Ошибка при сканировании инвентаря для {self.session_name}: {e}")
+            return 0, 0, 0
+
+        # ЭТАП 2: Проверяем порог и активируем если >= 200
+        logger.info(f"📊 Итого найдено звезд в инвентаре для {self.session_name}: {total_stars_found} шт. на сумму ~{total_stars_value}⭐")
+
+        if total_stars_value < 200:
+            logger.info(f"⏸️ Звезд меньше 200 ({total_stars_value}⭐), активация отложена для {self.session_name}")
+            return 0, total_stars_found, total_stars_value
+
+        # Активируем все звезды
+        logger.info(f"✅ Звезд >= 200 ({total_stars_value}⭐), активирую все звезды для {self.session_name}...")
+
+        try:
+            for star_item in stars_to_activate:
+                user_roulette_prize_id = star_item['id']
+                star_name = star_item['name']
+
+                if user_roulette_prize_id:
+                    success, message = await self.claim_roulette_prize(user_roulette_prize_id)
+                    if success:
+                        activated_count += 1
+                        logger.info(f"✅ Активированы звезды: {star_name} для {self.session_name}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось активировать звезды {star_name} для {self.session_name}: {message}")
+
+                    await asyncio.sleep(PRIZE_ACTIVATION_DELAY)
 
         except Exception as e:
             logger.error(f"Ошибка активации звезд для {self.session_name}: {e}")
 
-        logger.info(f"Итого для {self.session_name}: найдено {total_stars_found} звезд, активировано {activated_count}")
-        return activated_count, total_stars_found
+        logger.info(f"🎉 Активация завершена для {self.session_name}: активировано {activated_count} из {total_stars_found} (~{total_stars_value}⭐)")
+        return activated_count, total_stars_found, total_stars_value
 
     async def auto_exchange_cheap_gifts(self) -> Tuple[int, int, List[str]]:
         """
@@ -1556,6 +1586,42 @@ class VirusAPI:
 
         return status
 
+    async def complete_task(self, task_id: int) -> Tuple[bool, str]:
+        """Отмечает задачу как выполненную по task_id"""
+        query = """
+        mutation completeTask($taskId: Int!) {
+            completeTask(taskId: $taskId) {
+                success
+                __typename
+            }
+        }
+        """
+
+        variables = {
+            'taskId': task_id
+        }
+
+        result = await self._make_graphql_request(query, variables, operation_name="completeTask")
+
+        logger.info(f"📋 [{self.session_name}] completeTask({task_id}) response: {result}")
+
+        if result and 'data' in result and result['data'] and 'completeTask' in result['data']:
+            task_data = result['data']['completeTask']
+            if task_data.get('success'):
+                logger.info(f"✅ [{self.session_name}] Задача {task_id} отмечена как выполненная")
+                return True, "Task completed successfully"
+            else:
+                logger.warning(f"⚠️ [{self.session_name}] completeTask вернул success=false для задачи {task_id}")
+                return False, "API returned success=false"
+        elif result and 'errors' in result:
+            error = result['errors'][0] if result['errors'] else {}
+            message = error.get('message', 'Неизвестная ошибка')
+            logger.warning(f"⚠️ [{self.session_name}] Ошибка completeTask для задачи {task_id}: {message}")
+            return False, f"GraphQL error: {message}"
+        else:
+            logger.error(f"❌ [{self.session_name}] Неожиданный формат ответа completeTask для задачи {task_id}")
+            return False, "Unexpected response format"
+
     async def mark_test_spin_url_click(self, init_data: Optional[str] = None) -> Tuple[bool, str]:
         """Выполняет markTestSpinUrlClick мутацию для регистрации клика по testSpin ссылке"""
         query = """
@@ -1622,6 +1688,42 @@ class VirusAPI:
             return False, f"GraphQL error: {message}"
         else:
             logger.error(f"❌ Неожиданный формат ответа markTestSpinTonnelClick для {self.session_name}")
+            return False, "Unexpected response format"
+
+    async def mark_test_spin_task_click(self, task_id: int) -> Tuple[bool, str]:
+        """Отмечает клик по ссылке для задачи testSpin"""
+        query = """
+        mutation markTestSpinTaskClick($taskId: ID!) {
+            markTestSpinTaskClick(taskId: $taskId) {
+                success
+                __typename
+            }
+        }
+        """
+
+        variables = {
+            'taskId': str(task_id)  # ID передается как строка
+        }
+
+        result = await self._make_graphql_request(query, variables, operation_name="markTestSpinTaskClick")
+
+        logger.info(f"📋 [{self.session_name}] markTestSpinTaskClick({task_id}) response: {result}")
+
+        if result and 'data' in result and result['data'] and 'markTestSpinTaskClick' in result['data']:
+            task_data = result['data']['markTestSpinTaskClick']
+            if task_data.get('success'):
+                logger.info(f"✅ [{self.session_name}] Клик по задаче {task_id} зарегистрирован")
+                return True, "Task click marked successfully"
+            else:
+                logger.warning(f"⚠️ [{self.session_name}] markTestSpinTaskClick вернул success=false для задачи {task_id}")
+                return False, "API returned success=false"
+        elif result and 'errors' in result:
+            error = result['errors'][0] if result['errors'] else {}
+            message = error.get('message', 'Неизвестная ошибка')
+            logger.warning(f"⚠️ [{self.session_name}] Ошибка markTestSpinTaskClick для задачи {task_id}: {message}")
+            return False, f"GraphQL error: {message}"
+        else:
+            logger.error(f"❌ [{self.session_name}] Неожиданный формат ответа markTestSpinTaskClick для задачи {task_id}")
             return False, "Unexpected response format"
 
     async def mark_test_spin_portal_click(self) -> Tuple[bool, str]:

@@ -3,7 +3,7 @@ import asyncio
 from telethon import TelegramClient
 from typing import List, Dict, Optional, Tuple
 import logging
-from config import SESSIONS_DIR, TELEGRAM_CONNECT_TIMEOUT, VALIDATION_SEMAPHORE_LIMIT, SESSION_VALIDATION_CACHE_TTL
+import config
 from datetime import datetime
 import time
 
@@ -19,18 +19,18 @@ class SessionManager:
         self._validation_cache_timestamp: Optional[datetime] = None
 
         # Семафор для предотвращения одновременного доступа к SQLite базам
-        self._db_access_semaphore = asyncio.Semaphore(5)  # Максимум 5 одновременных подключений к БД
+        self._db_access_semaphore = asyncio.Semaphore(10)  # Увеличено для скорости
 
     async def load_sessions(self) -> int:
-        if not os.path.exists(SESSIONS_DIR):
-            os.makedirs(SESSIONS_DIR)
+        if not os.path.exists(config.SESSIONS_DIR):
+            os.makedirs(config.SESSIONS_DIR)
             return 0
 
-        session_files = [f for f in os.listdir(SESSIONS_DIR) if f.lower().endswith('.session')]
+        session_files = [f for f in os.listdir(config.SESSIONS_DIR) if f.lower().endswith('.session')]
         loaded_count = 0
 
         for session_file in session_files:
-            session_path = os.path.join(SESSIONS_DIR, session_file)
+            session_path = os.path.join(config.SESSIONS_DIR, session_file)
             session_name = session_file[:-8] if session_file.lower().endswith('.session') else session_file
 
             try:
@@ -54,20 +54,17 @@ class SessionManager:
             try:
                 # Для .session файлов используем путь напрямую
                 session_path = self.sessions_data[session_name]
-                # Используем стандартные API ID/Hash или загружаем из env
-                api_id = int(os.environ.get('TG_API_ID', '20632491'))
-                api_hash = os.environ.get('TG_API_HASH', '6b19ce4f2d8b4246b5c68c64a5c8e27e')
 
                 # Добавляем небольшую случайную задержку для избежания конфликтов
-                await asyncio.sleep(0.1 + (hash(session_name) % 100) / 1000.0)
+                await asyncio.sleep(0.05 + (hash(session_name) % 50) / 1000.0)  # Уменьшено для скорости
 
                 client = TelegramClient(
                     session_path,
-                    api_id=api_id,
-                    api_hash=api_hash,
-                    timeout=TELEGRAM_CONNECT_TIMEOUT,
-                    connection_retries=3,  # Уменьшено для скорости
-                    retry_delay=1  # Уменьшена задержка
+                    api_id=config.API_ID,
+                    api_hash=config.API_HASH,
+                    timeout=config.TELEGRAM_CONNECT_TIMEOUT,
+                    connection_retries=2,  # Уменьшено для скорости
+                    retry_delay=0.5  # Уменьшена задержка
                 )
                 await client.connect()
 
@@ -83,13 +80,13 @@ class SessionManager:
                 # Если это ошибка блокировки БД, ждем немного и пробуем еще раз
                 if "database is locked" in str(e).lower():
                     logger.warning(f"БД заблокирована для {session_name}, повторная попытка...")
-                    await asyncio.sleep(0.5 + (hash(session_name) % 10) / 10.0)
+                    await asyncio.sleep(0.3 + (hash(session_name) % 10) / 10.0)
                     try:
                         client = TelegramClient(
                             self.sessions_data[session_name],
-                            api_id=int(os.environ.get('TG_API_ID', '20632491')),
-                            api_hash=os.environ.get('TG_API_HASH', '6b19ce4f2d8b4246b5c68c64a5c8e27e'),
-                            timeout=TELEGRAM_CONNECT_TIMEOUT
+                            api_id=config.API_ID,
+                            api_hash=config.API_HASH,
+                            timeout=config.TELEGRAM_CONNECT_TIMEOUT
                         )
                         await client.connect()
                         if await client.is_user_authorized():
@@ -129,22 +126,21 @@ class SessionManager:
         valid_count = 0
         invalid_count = 0
 
-        # Увеличенный семафор для максимальной производительности
-        semaphore = asyncio.Semaphore(VALIDATION_SEMAPHORE_LIMIT)
+        # Убираем семафор - выполняем все операции параллельно без ограничений
+        # для максимальной скорости
 
         async def validate_single(session_name: str):
             nonlocal valid_count, invalid_count
-            async with semaphore:
-                try:
-                    is_valid = await self.validate_session(session_name)
-                    self._validation_cache[session_name] = is_valid
-                    if is_valid:
-                        valid_count += 1
-                    else:
-                        invalid_count += 1
-                except:
-                    self._validation_cache[session_name] = False
+            try:
+                is_valid = await self.validate_session(session_name)
+                self._validation_cache[session_name] = is_valid
+                if is_valid:
+                    valid_count += 1
+                else:
                     invalid_count += 1
+            except:
+                self._validation_cache[session_name] = False
+                invalid_count += 1
 
         tasks = [validate_single(name) for name in self.sessions_data.keys()]
         await asyncio.gather(*tasks, return_exceptions=True)

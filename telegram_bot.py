@@ -455,14 +455,46 @@ class VirusBotManager:
 
         await query.edit_message_text(start_message, reply_markup=cancel_keyboard)
 
+        # Создаем callback для обновления прогресса
+        last_update_time = [0]  # Используем список чтобы изменять в замыкании
+        total_sessions = len(session_names)
+
+        async def progress_callback(completed: int, total: int):
+            current_time = asyncio.get_event_loop().time()
+            # Обновляем не чаще чем раз в 1.5 секунды
+            if current_time - last_update_time[0] >= 1.5 or completed == 0 or completed == total:
+                last_update_time[0] = current_time
+
+                # Вычисляем процент
+                percent = int((completed / total) * 100) if total > 0 else 0
+
+                # Создаем прогресс бар
+                bar_length = 10
+                filled = int((completed / total) * bar_length) if total > 0 else 0
+                bar = "█" * filled + "░" * (bar_length - filled)
+
+                progress_message = f"⏳ {self.get_action_name(action)}...\n\n" \
+                                 f"📊 Прогресс: {completed}/{total} ({percent}%)\n" \
+                                 f"{bar}\n\n" \
+                                 f"⏱️ Обработка аккаунтов..."
+
+                try:
+                    await query.edit_message_text(progress_message, reply_markup=cancel_keyboard)
+                except Exception as e:
+                    # Игнорируем ошибки обновления (например, если сообщение не изменилось)
+                    pass
+
         try:
-            # Выполняем операцию
+            # Показываем начальный прогресс
+            await progress_callback(0, total_sessions)
+
+            # Выполняем операцию с прогресс колбэком
             if action == "spin":
-                results = await self.spin_worker.perform_spins_batch(session_names)
+                results = await self.spin_worker.perform_spins_batch(session_names, progress_callback)
             elif action == "validate":
-                results = await self.spin_worker.validate_all_accounts_batch(session_names)
+                results = await self.spin_worker.validate_all_accounts_batch(session_names, progress_callback)
             elif action == "balance":
-                results = await self.spin_worker.check_all_balances_batch(session_names)
+                results = await self.spin_worker.check_all_balances_batch(session_names, progress_callback=progress_callback)
             else:
                 await query.edit_message_text(
                     "❌ Неизвестная операция",
@@ -651,20 +683,37 @@ class VirusBotManager:
                 # Добавляем дополнительную информацию в зависимости от операции
                 if action == "spin":
                     stars = result.get('stars_activated', 0)
+                    stars_value = result.get('stars_value_activated', 0)
                     if stars > 0:
-                        message += f" (активировано {stars} звезд)"
+                        if stars_value > 0:
+                            message += f" (активировано {stars} звезд на сумму ~{stars_value}⭐)"
+                        else:
+                            message += f" (активировано {stars} звезд)"
                     if result.get('high_value_prize', False):
                         message += " 💎"
                 elif action == "balance":
                     stars_balance = result.get('stars_balance', 0)
+                    inventory_stars_value = result.get('inventory_stars_value', 0)
+                    inventory_stars_count = result.get('inventory_stars_count', 0)
                     gifts_count = result.get('gifts_count', 0)
                     gifts_details = result.get('gifts_details', [])
 
-                    balance_info = f"({stars_balance} звезд"
+                    # Формируем информацию о звездах с деталями
+                    balance_parts = []
+
+                    if inventory_stars_value > 0:
+                        # Показываем отдельно баланс и инвентарь
+                        balance_parts.append(f"💰 Баланс: {stars_balance}⭐")
+                        balance_parts.append(f"📦 Инвентарь: {inventory_stars_value}⭐ ({inventory_stars_count} шт)")
+                        balance_parts.append(f"📊 Всего: {stars_balance + inventory_stars_value}⭐")
+                    else:
+                        balance_parts.append(f"💰 Баланс: {stars_balance}⭐")
+
                     if gifts_count > 0:
-                        balance_info += f", {gifts_count} подарков"
-                    balance_info += ")"
-                    message += f" {balance_info}"
+                        balance_parts.append(f"🎁 Подарки: {gifts_count}")
+
+                    balance_info = "\n      ".join(balance_parts)
+                    message += f"\n      {balance_info}"
 
                     # Добавляем детальную информацию о подарках
                     if gifts_details:
