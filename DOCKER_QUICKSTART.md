@@ -47,9 +47,23 @@ API_HASH=ваш_api_hash
 cp ~/ваши_сессии/*.session ./sessions/
 ```
 
-### 4. Запуск
+### 4. Создайте папки для данных
 
 ```bash
+# Создайте папки если их нет
+mkdir -p sessions logs
+
+# Исправьте права доступа
+chmod -R 777 logs/
+```
+
+### 5. Запуск
+
+```bash
+# Экспортируйте UID/GID (Linux/macOS)
+export UID=$(id -u)
+export GID=$(id -g)
+
 # Запуск в фоновом режиме
 docker-compose up -d
 
@@ -57,7 +71,7 @@ docker-compose up -d
 docker-compose logs -f
 ```
 
-### 5. Использование
+### 6. Использование
 
 Отправьте `/start` в Telegram бот и используйте интерфейс для управления.
 
@@ -131,6 +145,25 @@ ls -la sessions/
 
 # Исправьте если нужно
 chmod 644 sessions/*.session
+```
+
+### Permission denied для logs/
+
+```bash
+# Способ 1: Исправьте права (рекомендуется)
+chmod -R 777 logs/
+
+# Способ 2: Установите UID/GID явно
+export UID=$(id -u)
+export GID=$(id -g)
+docker-compose down
+docker-compose up -d
+
+# Способ 3: Удалите папку и пересоздайте
+rm -rf logs/
+mkdir logs
+chmod 777 logs/
+docker-compose up -d
 ```
 
 ### Контейнер постоянно перезапускается

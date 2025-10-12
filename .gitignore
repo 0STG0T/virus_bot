@@ -2,6 +2,7 @@
 sessions/
 *.session
 .env
+sessions.zip
 
 # Логи
 *.log

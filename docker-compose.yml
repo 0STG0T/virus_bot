@@ -8,6 +8,9 @@ services:
     container_name: virus-bot
     restart: unless-stopped
 
+    # Запуск от имени текущего пользователя для доступа к volumes
+    user: "${UID:-1000}:${GID:-1000}"
+
     # Переменные окружения из .env файла
     environment:
       - VIRUS_BOT_TOKEN=${VIRUS_BOT_TOKEN}
