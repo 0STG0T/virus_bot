@@ -862,9 +862,14 @@ class VirusAPI:
 
     async def activate_all_stars(self) -> Tuple[int, int]:
         """
-        Активирует все звезды из инвентаря только если их сумма >= 200.
-        Возвращает (активировано, всего_найдено)
+        Активирует звезды из инвентаря, оставляя минимум 100⭐ в инвентаре.
+        Логика:
+        - Если в инвентаре < 100⭐: не активирует ничего
+        - Если в инвентаре >= 100⭐: активирует только избыток (inventory_value - 100)⭐
+        Возвращает (активировано, всего_найдено, total_stars_value)
         """
+        MIN_INVENTORY_STARS = 100  # Минимум звезд, которые всегда остаются в инвентаре
+
         activated_count = 0
         total_stars_found = 0
         total_stars_value = 0
@@ -952,26 +957,45 @@ class VirusAPI:
             logger.error(f"Ошибка при сканировании инвентаря для {self.session_name}: {e}")
             return 0, 0, 0
 
-        # ЭТАП 2: Проверяем порог и активируем если >= 200
+        # ЭТАП 2: Проверяем порог и активируем только избыток
         logger.info(f"📊 Итого найдено звезд в инвентаре для {self.session_name}: {total_stars_found} шт. на сумму ~{total_stars_value}⭐")
 
-        if total_stars_value < 200:
-            logger.info(f"⏸️ Звезд меньше 200 ({total_stars_value}⭐), активация отложена для {self.session_name}")
+        if total_stars_value < MIN_INVENTORY_STARS:
+            logger.info(f"⏸️ Звезд меньше {MIN_INVENTORY_STARS} ({total_stars_value}⭐), активация отложена для {self.session_name}")
+            logger.info(f"💡 Для ценных подарков нужно >= {MIN_INVENTORY_STARS}⭐ в инвентаре")
             return 0, total_stars_found, total_stars_value
 
-        # Активируем все звезды
-        logger.info(f"✅ Звезд >= 200 ({total_stars_value}⭐), активирую все звезды для {self.session_name}...")
+        # Вычисляем сколько можем активировать (оставляя минимум MIN_INVENTORY_STARS в инвентаре)
+        stars_to_activate_value = total_stars_value - MIN_INVENTORY_STARS
+        logger.info(f"✅ Звезд >= {MIN_INVENTORY_STARS} ({total_stars_value}⭐), можно активировать {stars_to_activate_value}⭐ (оставляя {MIN_INVENTORY_STARS}⭐ в инвентаре)")
 
+        # Сортируем звезды по убыванию стоимости (активируем сначала крупные пачки)
+        stars_to_activate.sort(key=lambda x: x['value'], reverse=True)
+
+        # Активируем звезды пока не наберем нужную сумму
+        activated_value = 0
         try:
             for star_item in stars_to_activate:
+                # Проверяем не превысили ли мы лимит
+                if activated_value >= stars_to_activate_value:
+                    logger.info(f"🎯 Достигнут целевой объем активации: {activated_value}⭐ (лимит: {stars_to_activate_value}⭐)")
+                    break
+
                 user_roulette_prize_id = star_item['id']
                 star_name = star_item['name']
+                star_value = star_item['value']
+
+                # Проверяем не превысим ли мы лимит этой активацией
+                if activated_value + star_value > stars_to_activate_value:
+                    logger.debug(f"⏭️ Пропускаем {star_name} ({star_value}⭐), чтобы не превысить лимит")
+                    continue
 
                 if user_roulette_prize_id:
                     success, message = await self.claim_roulette_prize(user_roulette_prize_id)
                     if success:
                         activated_count += 1
-                        logger.info(f"✅ Активированы звезды: {star_name} для {self.session_name}")
+                        activated_value += star_value
+                        logger.info(f"✅ Активированы звезды: {star_name} ({star_value}⭐) для {self.session_name}")
                     else:
                         logger.warning(f"⚠️ Не удалось активировать звезды {star_name} для {self.session_name}: {message}")
 
@@ -980,7 +1004,9 @@ class VirusAPI:
         except Exception as e:
             logger.error(f"Ошибка активации звезд для {self.session_name}: {e}")
 
-        logger.info(f"🎉 Активация завершена для {self.session_name}: активировано {activated_count} из {total_stars_found} (~{total_stars_value}⭐)")
+        remaining_in_inventory = total_stars_value - activated_value
+        logger.info(f"🎉 Активация завершена для {self.session_name}: активировано {activated_count} шт. на ~{activated_value}⭐")
+        logger.info(f"📦 В инвентаре осталось ~{remaining_in_inventory}⭐ (минимум для ценных подарков)")
         return activated_count, total_stars_found, total_stars_value
 
     async def auto_exchange_cheap_gifts(self) -> Tuple[int, int, List[str]]:
