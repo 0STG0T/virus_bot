@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  virus-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: virus-bot
+    restart: unless-stopped
+
+    # Переменные окружения из .env файла
+    environment:
+      - VIRUS_BOT_TOKEN=${VIRUS_BOT_TOKEN}
+      - LOG_CHAT_ID=${LOG_CHAT_ID:-}
+      - API_ID=${API_ID:-}
+      - API_HASH=${API_HASH:-}
+      - PYTHONUNBUFFERED=1
+
+      # Опциональные настройки производительности
+      - MAX_CONCURRENT_SESSIONS=${MAX_CONCURRENT_SESSIONS:-100}
+      - AUTO_SPIN_ENABLED=${AUTO_SPIN_ENABLED:-true}
+      - AUTO_SPIN_THRESHOLD=${AUTO_SPIN_THRESHOLD:-200}
+      - AUTO_GIFT_EXCHANGE_ENABLED=${AUTO_GIFT_EXCHANGE_ENABLED:-true}
+      - AUTO_GIFT_EXCHANGE_THRESHOLD=${AUTO_GIFT_EXCHANGE_THRESHOLD:-50}
+      - REDUCED_LOGGING_MODE=${REDUCED_LOGGING_MODE:-false}
+      - PERFORMANCE_MODE=${PERFORMANCE_MODE:-true}
+
+    # Монтирование томов для персистентности данных
+    volumes:
+      # Сессии Telegram (ОБЯЗАТЕЛЬНО)
+      - ./sessions:/app/sessions:rw
+
+      # Логи (опционально)
+      - ./logs:/app/logs:rw
+
+      # Конфигурация (опционально, если нужно переопределить)
+      # - ./config.py:/app/config.py:ro
+
+    # Ограничения ресурсов (рекомендуется для стабильности)
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Сеть
+    networks:
+      - virus-bot-network
+
+networks:
+  virus-bot-network:
+    driver: bridge
