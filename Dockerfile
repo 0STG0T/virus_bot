@@ -53,6 +53,7 @@ ENV VIRUS_BOT_TOKEN="" \
     LOG_CHAT_ID="" \
     API_ID="" \
     API_HASH="" \
+    DOCKER_CONTAINER=1 \
     PYTHONUNBUFFERED=1
 
 # Healthcheck для мониторинга состояния контейнера
