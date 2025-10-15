@@ -305,15 +305,19 @@ class SpinWorker:
                 result['reward'] = reward_desc
                 result['high_value_item'] = high_value
 
-                # Уведомляем о всех подарках (не только дорогих)
+                # Уведомляем о ВСЕХ подарках из фри спинов в формате: сессия - подарок - ценность
                 if is_gift and self.notification_callback:
+                    # Извлекаем стоимость подарка из reward
+                    exchange_price = reward.get('exchangePrice', 0)
+                    gift_name = reward.get('name', 'Неизвестный подарок')
+
                     if high_value:
                         await self.notification_callback(
-                            f"💎 ДОРОГОЙ ПОДАРОК на {session_name}: {reward_desc}"
+                            f"💎 ФРИ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
                     else:
                         await self.notification_callback(
-                            f"🎁 Подарок на {session_name}: {reward_desc}"
+                            f"🎁 ФРИ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
             # Активируем все звезды из инвентаря после успешного спина
@@ -324,7 +328,7 @@ class SpinWorker:
                     result['stars_activated'] = activated_count
                     result['stars_value_activated'] = stars_value
                 elif total_found > 0:
-                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (недостаточно для порога 200⭐)")
+                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре < 100⭐)")
             except Exception as e:
                 logger.error(f"Ошибка активации звезд для {session_name}: {e}")
 
@@ -492,7 +496,7 @@ class SpinWorker:
                         result['message'] = f'Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐)'
                     else:
                         if total_found > 0:
-                            result['message'] = f'Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 (недостаточно для порога 200⭐)'
+                            result['message'] = f'Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 (в инвентаре < 100⭐)'
                         else:
                             result['message'] = 'Нет звезд в инвентаре для активации'
 
@@ -618,15 +622,19 @@ class SpinWorker:
                 result['reward'] = reward_desc
                 result['high_value_item'] = high_value
 
-                # Уведомляем о всех подарках с платных спинов
+                # Уведомляем о всех подарках с платных спинов в формате: сессия - подарок - ценность
                 if is_gift and self.notification_callback:
+                    # Извлекаем стоимость подарка из reward
+                    exchange_price = reward.get('exchangePrice', 0)
+                    gift_name = reward.get('name', 'Неизвестный подарок')
+
                     if high_value:
                         await self.notification_callback(
-                            f"💎 ДОРОГОЙ ПОДАРОК на {session_name}: {reward_desc} (платный спин)"
+                            f"💎 ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
                     else:
                         await self.notification_callback(
-                            f"🎁 Подарок на {session_name}: {reward_desc} (платный спин)"
+                            f"🎁 ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
             # Активируем все звезды из инвентаря после успешного платного спина
@@ -637,7 +645,7 @@ class SpinWorker:
                     result['stars_activated'] = activated_count
                     result['stars_value_activated'] = stars_value
                 elif total_found > 0:
-                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (недостаточно для порога 200⭐)")
+                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре < 100⭐)")
             except Exception as e:
                 logger.error(f"Ошибка активации звезд после платного спина для {session_name}: {e}")
 
@@ -1198,15 +1206,18 @@ class SpinWorker:
                 result['prize_name'] = prize.get('name', '')
                 result['high_value_prize'] = is_high_value
 
-                # Уведомляем о подарках с автоматических платных спинов
+                # Уведомляем о подарках с автоматических платных спинов в формате: сессия - подарок - ценность
                 if is_gift and self.notification_callback:
+                    exchange_price = prize.get('exchangePrice', 0)
+                    gift_name = prize.get('name', 'Неизвестный подарок')
+
                     if is_high_value:
                         await self.notification_callback(
-                            f"💎 ДОРОГОЙ ПОДАРОК на {session_name}: {prize_description} (авто-спин)"
+                            f"💎 АВТО ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
                     else:
                         await self.notification_callback(
-                            f"🎁 Подарок на {session_name}: {prize_description} (авто-спин)"
+                            f"🎁 АВТО ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
                 # Активируем звезды из инвентаря после спина
@@ -1217,13 +1228,7 @@ class SpinWorker:
                 if activated_stars > 0:
                     result['message'] += f" (активировано {activated_stars} звезд на сумму ~{stars_value}⭐)"
                 elif total_found > 0:
-                    result['message'] += f" (найдено {total_found} звезд на сумму ~{stars_value}⭐, но не активировано - недостаточно для порога 200⭐)"
-
-                # Уведомляем о ценном призе через callback
-                if is_high_value and self.notification_callback:
-                    await self.notification_callback(
-                        f"💎 АВТОСПИН: {session_name} получил ценный приз {prize.get('name', 'неизвестно')} за 200 звезд!"
-                    )
+                    result['message'] += f" (найдено {total_found} звезд на сумму ~{stars_value}⭐, но не активировано - в инвентаре < 100⭐)"
 
                 logger.info(f"✅ Платный спин {session_name}: {result['message']}")
 

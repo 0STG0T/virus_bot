@@ -37,6 +37,7 @@ class VirusBotManager:
 
     async def setup(self, bot_token: str):
         config.BOT_TOKEN = bot_token
+        logger.info("🔧 Начало настройки бота...")
 
         # Настраиваем таймауты для стабильной работы
         from telegram.request import HTTPXRequest
@@ -49,12 +50,17 @@ class VirusBotManager:
         )
 
         self.app = Application.builder().token(bot_token).request(request).build()
+        logger.info("✅ Application создан")
 
         self.app.add_handler(CommandHandler("start", self.start_command))
+        logger.info("✅ CommandHandler для /start зарегистрирован")
+
         self.app.add_handler(CallbackQueryHandler(self.button_callback))
+        logger.info("✅ CallbackQueryHandler зарегистрирован")
 
         # Добавляем обработчик ошибок
         self.app.add_error_handler(self.error_handler)
+        logger.info("✅ Error handler зарегистрирован")
 
         # Создаем SpinWorker с callback для уведомлений
         self.spin_worker = SpinWorker(
@@ -174,12 +180,16 @@ class VirusBotManager:
 
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик команды /start"""
+        logger.info(f"🚀 Команда /start получена от пользователя {update.effective_chat.id}")
+
         if not config.LOG_CHAT_ID:
             config.LOG_CHAT_ID = update.effective_chat.id
+            logger.info(f"📝 Установлен LOG_CHAT_ID: {config.LOG_CHAT_ID}")
 
         self.main_chat_id = update.effective_chat.id
 
         # Получаем начальную статистику
+        logger.info("📊 Получение начальной статистики...")
         stats = await self.get_account_stats()
         self.cached_stats = stats
 
@@ -187,17 +197,20 @@ class VirusBotManager:
         reply_markup = self.get_main_keyboard()
 
         # Отправляем главное сообщение
+        logger.info("📤 Отправка главного сообщения...")
         sent_message = await update.message.reply_text(
             message_text,
             reply_markup=reply_markup
         )
 
         self.main_message_id = sent_message.message_id
+        logger.info(f"✅ Главное сообщение отправлено (ID: {self.main_message_id})")
 
         # Запускаем объединенную задачу автообновления и автоспинов (каждый час)
         if self.update_task:
             self.update_task.cancel()
         self.update_task = asyncio.create_task(self.auto_update_and_spins_monitor())
+        logger.info("🔄 Запущена задача автообновления")
 
         # Отменяем старую задачу автоспинов, так как теперь все в одном месте
         if self.auto_spin_task:
@@ -398,18 +411,25 @@ class VirusBotManager:
 
     async def button_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Обработчик нажатий кнопок"""
+        logger.info(f"🔔 Получен callback! Update: {update}")
         query = update.callback_query
+        logger.info(f"🔔 Callback data: {query.data if query else 'None'}")
+
         try:
             await query.answer()
+            logger.info(f"✅ Callback answer отправлен")
         except Exception as e:
             logger.warning(f"Не удалось ответить на callback query: {e}")
 
         if query.data.startswith("action_"):
             action = query.data.replace("action_", "")
+            logger.info(f"🎬 Обработка действия: {action}")
             await self.handle_action(query, action)
         elif query.data == "show_details":
+            logger.info(f"📋 Показ детальных результатов")
             await self.show_detailed_results(query)
         elif query.data == "back_to_main":
+            logger.info(f"🏠 Возврат в главное меню")
             await self.back_to_main_menu(query)
         else:
             logger.warning(f"Неизвестный callback: {query.data}")
@@ -678,7 +698,13 @@ class VirusBotManager:
         for result in results:
             session_name = result['session_name']
             if result.get('success', False):
-                message = result.get('message', 'Успешно')
+                # Для разных операций формируем разное начало сообщения
+                if action == "balance":
+                    # Для баланса не показываем дублирующее сообщение
+                    message = ""
+                else:
+                    # Для других операций показываем стандартное сообщение
+                    message = result.get('message', 'Успешно')
 
                 # Добавляем дополнительную информацию в зависимости от операции
                 if action == "spin":
@@ -698,36 +724,35 @@ class VirusBotManager:
                     gifts_count = result.get('gifts_count', 0)
                     gifts_details = result.get('gifts_details', [])
 
-                    # Формируем информацию о звездах с деталями
-                    balance_parts = []
+                    # Компактный формат: ВСЕГДА показываем актив | неактив | всего
+                    total_stars = stars_balance + inventory_stars_value
 
-                    if inventory_stars_value > 0:
-                        # Показываем отдельно баланс и инвентарь
-                        balance_parts.append(f"💰 Баланс: {stars_balance}⭐")
-                        balance_parts.append(f"📦 Инвентарь: {inventory_stars_value}⭐ ({inventory_stars_count} шт)")
-                        balance_parts.append(f"📊 Всего: {stars_balance + inventory_stars_value}⭐")
+                    # Формируем основную строку баланса с разделением
+                    if inventory_stars_count > 0:
+                        # Если есть звезды в инвентаре - показываем с количеством
+                        balance_line = f"⭐ {stars_balance} актив | 📦 {inventory_stars_value} неактив ({inventory_stars_count} шт) | 📊 {total_stars} всего"
                     else:
-                        balance_parts.append(f"💰 Баланс: {stars_balance}⭐")
+                        # Если нет звезд в инвентаре - показываем 0
+                        balance_line = f"⭐ {stars_balance} актив | 📦 0 неактив | 📊 {total_stars} всего"
 
+                    message += f"\n      {balance_line}"
+
+                    # Показываем подарки компактно
                     if gifts_count > 0:
-                        balance_parts.append(f"🎁 Подарки: {gifts_count}")
-
-                    balance_info = "\n      ".join(balance_parts)
-                    message += f"\n      {balance_info}"
-
-                    # Добавляем детальную информацию о подарках
-                    if gifts_details:
-                        gift_lines = []
-                        for gift in gifts_details:
-                            gift_lines.append(f"    🎁 {gift['formatted']}")
-
-                        # Ограничиваем количество подарков в одной строке для экономии места
-                        if len(gift_lines) <= 3:
-                            message += "\n" + "\n".join(gift_lines)
+                        if len(gifts_details) <= 2:
+                            # Если подарков мало - показываем все
+                            gift_names = [f"{g['name']} ({g['price']}⭐)" for g in gifts_details]
+                            message += f"\n      🎁 {', '.join(gift_names)}"
                         else:
-                            message += f"\n    🎁 {len(gift_lines)} подарков: {', '.join([g['name'] for g in gifts_details[:3]])}{'...' if len(gifts_details) > 3 else ''}"
+                            # Если подарков много - показываем количество и первые 2
+                            gift_names = [g['name'] for g in gifts_details[:2]]
+                            message += f"\n      🎁 {gifts_count} шт: {', '.join(gift_names)}..."
 
-                report_lines.append(f"✅ {session_name}: {message}")
+                # Формируем итоговую строку (без лишнего двоеточия если message пустой)
+                if message:
+                    report_lines.append(f"✅ {session_name}: {message}")
+                else:
+                    report_lines.append(f"✅ {session_name}")
             else:
                 error_msg = result.get('message', 'Неизвестная ошибка')
                 report_lines.append(f"❌ {session_name}: {error_msg}")
@@ -818,11 +843,21 @@ class VirusBotManager:
                 await self._check_network_connectivity()
 
                 # Запускаем приложение
+                logger.info("📦 Инициализация приложения...")
                 await self.app.initialize()
-                await self.app.start()
-                await self.app.updater.start_polling()
 
-                logger.info("Бот запущен и готов к работе")
+                logger.info("🚀 Запуск приложения...")
+                await self.app.start()
+
+                logger.info("📡 Запуск polling для получения обновлений...")
+                await self.app.updater.start_polling(
+                    allowed_updates=["message", "callback_query"],
+                    drop_pending_updates=True
+                )
+
+                logger.info("✅ Бот запущен и готов к работе")
+                logger.info(f"📊 Зарегистрировано handlers: {len(self.app.handlers)}")
+                logger.info("⏳ Ожидание обновлений от Telegram...")
                 break
 
             except Exception as e:
@@ -847,6 +882,7 @@ class VirusBotManager:
         except KeyboardInterrupt:
             pass
         finally:
+            logger.info("🛑 Остановка бота...")
             # Останавливаем задачи автообновления и автоспинов
             if self.update_task:
                 self.update_task.cancel()
@@ -857,7 +893,8 @@ class VirusBotManager:
             await self.app.stop()
             await self.app.shutdown()
             await self.session_manager.close_all_clients()
+            logger.info("✅ Бот остановлен")
 
-    def stop(self):
+    async def stop(self):
         """Остановка бота"""
         self.is_running = False

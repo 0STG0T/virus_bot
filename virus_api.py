@@ -1012,6 +1012,7 @@ class VirusAPI:
     async def auto_exchange_cheap_gifts(self) -> Tuple[int, int, List[str]]:
         """
         Автоматически продает подарки ≤ пороговой стоимости
+        ТОЛЬКО если в инвентаре > 100 неактивированных звезд
         Возвращает: (продано_подарков, всего_найдено, список_проданных)
         """
         if not AUTO_GIFT_EXCHANGE_ENABLED:
@@ -1021,9 +1022,57 @@ class VirusAPI:
         total_gifts_found = 0
         exchanged_gifts = []
         cursor = 0
+        MIN_INVENTORY_STARS = 100  # Минимум звезд в инвентаре для начала продажи
 
         try:
             logger.info(f"🔍 Начинаем автопродажу подарков для {self.session_name} (порог: {AUTO_GIFT_EXCHANGE_THRESHOLD}⭐)")
+
+            # ЭТАП 1: Сначала проверяем сколько неактивированных звезд в инвентаре
+            inventory_stars_value = 0
+            temp_cursor = 0
+
+            while True:
+                inventory = await self.get_roulette_inventory(cursor=temp_cursor, limit=50, use_cache=True)
+                if not inventory or not inventory.get('success'):
+                    break
+
+                prizes = inventory.get('prizes')
+                if not prizes:
+                    break
+
+                for prize_item in prizes:
+                    status = prize_item.get('status')
+                    if status != 'NONE':
+                        continue
+
+                    prize = prize_item.get('prize', {})
+                    prize_name = prize.get('name', '').lower()
+
+                    # Считаем только неактивированные звезды (status='NONE')
+                    if 'stars' in prize_name or 'star' in prize_name:
+                        # Извлекаем количество звезд
+                        import re
+                        numbers = re.findall(r'\d+', prize_name)
+                        if numbers:
+                            inventory_stars_value += int(numbers[0])
+
+                if not inventory.get('hasNextPage'):
+                    break
+
+                next_cursor = inventory.get('nextCursor')
+                if next_cursor is None:
+                    break
+
+                temp_cursor = next_cursor
+
+            logger.info(f"📊 Неактивированных звезд в инвентаре: {inventory_stars_value}⭐ для {self.session_name}")
+
+            # ЭТАП 2: Если звезд < 100 - не продаем подарки
+            if inventory_stars_value <= MIN_INVENTORY_STARS:
+                logger.info(f"⏸️ Автопродажа подарков отложена для {self.session_name}: в инвентаре {inventory_stars_value}⭐ (<= {MIN_INVENTORY_STARS}⭐)")
+                return 0, 0, []
+
+            logger.info(f"✅ Достаточно звезд в инвентаре ({inventory_stars_value}⭐ > {MIN_INVENTORY_STARS}⭐), начинаем автопродажу подарков")
 
             while True:
                 # Получаем страницу инвентаря

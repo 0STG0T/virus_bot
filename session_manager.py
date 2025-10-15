@@ -117,7 +117,7 @@ class SessionManager:
         # Проверяем кэш если включен
         if (use_cache and self._validation_cache_timestamp is not None):
             cache_age = (datetime.now() - self._validation_cache_timestamp).total_seconds()
-            if cache_age < SESSION_VALIDATION_CACHE_TTL:
+            if cache_age < config.SESSION_VALIDATION_CACHE_TTL:
                 logger.debug(f"Используем кэш валидации сессий (возраст: {cache_age:.1f}s)")
                 valid_count = sum(1 for is_valid in self._validation_cache.values() if is_valid)
                 invalid_count = len(self._validation_cache) - valid_count
