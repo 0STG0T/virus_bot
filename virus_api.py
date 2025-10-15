@@ -860,6 +860,73 @@ class VirusAPI:
         else:
             return False, "Неожиданный формат ответа от API"
 
+    async def should_activate_stars(self) -> Tuple[bool, int, int, int, str]:
+        """
+        ТОЛЬКО ПРОВЕРЯЕТ нужна ли активация звезд, БЕЗ САМОЙ АКТИВАЦИИ
+        Возвращает: (нужна_активация, активных_звезд_на_балансе, неактивированных_в_инвентаре, можно_активировать, причина)
+        """
+        MIN_INVENTORY_STARS = 100
+
+        try:
+            # Получаем текущий баланс активированных звезд
+            stars_balance, _ = await self.get_balance(use_cache=False)
+
+            # Сканируем инвентарь для подсчета неактивированных звезд
+            inventory_stars_value = 0
+            cursor = 0
+
+            while True:
+                inventory = await self.get_roulette_inventory(cursor=cursor, use_cache=False)
+                if not inventory or not inventory.get('success'):
+                    break
+
+                prizes = inventory.get('prizes')
+                if not prizes:
+                    break
+
+                for prize_item in prizes:
+                    status = prize_item.get('status')
+                    if status != 'NONE':
+                        continue
+
+                    prize_name = prize_item.get('name', '').lower()
+                    inner_prize = prize_item.get('prize', {})
+                    inner_prize_name = inner_prize.get('name', '').lower()
+
+                    is_stars = ('stars' in prize_name or 'star' in prize_name or
+                               'stars' in inner_prize_name or 'star' in inner_prize_name)
+                    is_claimable = inner_prize.get('isClaimable', False)
+
+                    if is_stars and is_claimable:
+                        import re
+                        name_to_parse = inner_prize_name or prize_name
+                        numbers = re.findall(r'\d+', name_to_parse)
+                        if numbers:
+                            inventory_stars_value += int(numbers[0])
+
+                if not inventory.get('hasNextPage', False):
+                    break
+
+                cursor = inventory.get('nextCursor')
+                if not cursor:
+                    break
+
+            # Определяем нужна ли активация
+            # Активируем ТОЛЬКО если после активации останется > 100⭐ в инвентаре
+            if inventory_stars_value <= MIN_INVENTORY_STARS:
+                reason = f"в инвентаре {inventory_stars_value}⭐ <= {MIN_INVENTORY_STARS}⭐"
+                return False, stars_balance, inventory_stars_value, 0, reason
+            else:
+                # Можем активировать: inventory_stars_value - MIN_INVENTORY_STARS
+                # Оставляем СТРОГО > 100⭐ в инвентаре
+                can_activate = inventory_stars_value - MIN_INVENTORY_STARS
+                reason = f"в инвентаре {inventory_stars_value}⭐ > {MIN_INVENTORY_STARS}⭐"
+                return True, stars_balance, inventory_stars_value, can_activate, reason
+
+        except Exception as e:
+            logger.error(f"Ошибка проверки необходимости активации для {self.session_name}: {e}")
+            return False, 0, 0, 0, f"ошибка: {str(e)}"
+
     async def activate_all_stars(self) -> Tuple[int, int]:
         """
         Активирует звезды из инвентаря, оставляя минимум 100⭐ в инвентаре.

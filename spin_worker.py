@@ -320,15 +320,25 @@ class SpinWorker:
                             f"🎁 ФРИ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
+            # Проверяем и логируем решение об активации звезд
+            try:
+                should_activate, balance_stars, inventory_stars, can_activate, reason = await api.should_activate_stars()
+                if should_activate:
+                    logger.info(f"✅ [{session_name}] АКТИВАЦИЯ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐, можно активировать ~{can_activate}⭐ ({reason})")
+                else:
+                    logger.info(f"⏸️ [{session_name}] АКТИВАЦИЯ НЕ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
+            except Exception as e:
+                logger.error(f"Ошибка проверки активации для {session_name}: {e}")
+
             # Активируем все звезды из инвентаря после успешного спина
             try:
                 activated_count, total_found, stars_value = await api.activate_all_stars()
                 if activated_count > 0:
-                    logger.info(f"Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name}")
+                    logger.info(f"✅ Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name}")
                     result['stars_activated'] = activated_count
                     result['stars_value_activated'] = stars_value
                 elif total_found > 0:
-                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре < 100⭐)")
+                    logger.info(f"⏸️ Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре <= 100⭐)")
             except Exception as e:
                 logger.error(f"Ошибка активации звезд для {session_name}: {e}")
 
@@ -637,15 +647,25 @@ class SpinWorker:
                             f"🎁 ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
+            # Проверяем и логируем решение об активации звезд
+            try:
+                should_activate, balance_stars, inventory_stars, can_activate, reason = await api.should_activate_stars()
+                if should_activate:
+                    logger.info(f"✅ [{session_name}] ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐, можно активировать ~{can_activate}⭐ ({reason})")
+                else:
+                    logger.info(f"⏸️ [{session_name}] ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НЕ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
+            except Exception as e:
+                logger.error(f"Ошибка проверки активации для {session_name}: {e}")
+
             # Активируем все звезды из инвентаря после успешного платного спина
             try:
                 activated_count, total_found, stars_value = await api.activate_all_stars()
                 if activated_count > 0:
-                    logger.info(f"Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name} (платный спин)")
+                    logger.info(f"✅ Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name} (платный спин)")
                     result['stars_activated'] = activated_count
                     result['stars_value_activated'] = stars_value
                 elif total_found > 0:
-                    logger.warning(f"Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре < 100⭐)")
+                    logger.info(f"⏸️ Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре <= 100⭐)")
             except Exception as e:
                 logger.error(f"Ошибка активации звезд после платного спина для {session_name}: {e}")
 
@@ -1220,6 +1240,16 @@ class SpinWorker:
                             f"🎁 АВТО ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
                         )
 
+                # Проверяем и логируем решение об активации звезд
+                try:
+                    should_activate, balance_stars, inventory_stars, can_activate, reason = await api.should_activate_stars()
+                    if should_activate:
+                        logger.info(f"✅ [{session_name}] АВТО ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐, можно активировать ~{can_activate}⭐ ({reason})")
+                    else:
+                        logger.info(f"⏸️ [{session_name}] АВТО ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НЕ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
+                except Exception as e:
+                    logger.error(f"Ошибка проверки активации для {session_name}: {e}")
+
                 # Активируем звезды из инвентаря после спина
                 activated_stars, total_found, stars_value = await api.activate_all_stars()
                 result['stars_activated'] = activated_stars
@@ -1228,7 +1258,7 @@ class SpinWorker:
                 if activated_stars > 0:
                     result['message'] += f" (активировано {activated_stars} звезд на сумму ~{stars_value}⭐)"
                 elif total_found > 0:
-                    result['message'] += f" (найдено {total_found} звезд на сумму ~{stars_value}⭐, но не активировано - в инвентаре < 100⭐)"
+                    result['message'] += f" (найдено {total_found} звезд на сумму ~{stars_value}⭐, но не активировано - в инвентаре <= 100⭐)"
 
                 logger.info(f"✅ Платный спин {session_name}: {result['message']}")
 
