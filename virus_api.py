@@ -8,9 +8,7 @@ from fake_useragent import UserAgent
 from config import (WEBAPP_URL, GRAPHQL_URL, HEADERS, HIGH_VALUE_THRESHOLD,
                    HTTP_REQUEST_TIMEOUT, SUBSCRIPTION_DELAY, PRIZE_ACTIVATION_DELAY,
                    AUTO_GIFT_EXCHANGE_ENABLED, AUTO_GIFT_EXCHANGE_THRESHOLD,
-                   INVENTORY_CACHE_ENABLED, INVENTORY_CACHE_TTL, REDUCED_LOGGING_MODE,
-                   HTTP_CONNECTION_POOL_SIZE, BALANCE_CACHE_ENABLED, BALANCE_CACHE_TTL,
-                   USER_DATA_CACHE_TTL, PERFORMANCE_MODE)
+                   REDUCED_LOGGING_MODE, HTTP_CONNECTION_POOL_SIZE, PERFORMANCE_MODE)
 
 # Импортируем настройку логирования
 try:
@@ -31,16 +29,6 @@ class VirusAPI:
         self.auth_data: Optional[str] = None
         self.auth_token: Optional[str] = None
         self.user_data: Optional[Dict] = None
-
-        # Кэш инвентаря
-        self._inventory_cache: Optional[Dict] = None
-        self._inventory_cache_timestamp: Optional[datetime] = None
-
-        # Кэш балансов и данных пользователей для максимальной производительности
-        self._balance_cache: Optional[Dict] = None
-        self._balance_cache_timestamp: Optional[datetime] = None
-        self._user_data_cache: Optional[Dict] = None
-        self._user_data_cache_timestamp: Optional[datetime] = None
 
     async def init_session(self):
         if not self.session:
@@ -264,16 +252,8 @@ class VirusAPI:
             logger.error(f"GraphQL request error: {e}", exc_info=True)
             return None
 
-    async def get_user_info(self, use_cache: bool = True) -> Optional[Dict]:
-        """Получает информацию пользователя с кэшированием для максимальной производительности"""
-
-        # Проверяем кэш если включен
-        if (use_cache and self._user_data_cache is not None and self._user_data_cache_timestamp is not None):
-            cache_age = (datetime.now() - self._user_data_cache_timestamp).total_seconds()
-            if cache_age < USER_DATA_CACHE_TTL:
-                if not REDUCED_LOGGING_MODE:
-                    logger.debug(f"Используем кэш данных пользователя для {self.session_name} (возраст: {cache_age:.1f}s)")
-                return self._user_data_cache
+    async def get_user_info(self) -> Optional[Dict]:
+        """Получает информацию пользователя"""
 
         query = """
         query me {
@@ -312,14 +292,10 @@ class VirusAPI:
             user_data = result['data']['me']
             self.user_data = user_data
 
-            # Кэшируем результат
-            self._user_data_cache = user_data
-            self._user_data_cache_timestamp = datetime.now()
-
             if not REDUCED_LOGGING_MODE or PERFORMANCE_MODE:
                 logger.debug(f"Обновлены данные пользователя для {self.session_name}")
             else:
-                logger.info("Получена информация о пользователе через GraphQL")
+                logger.info("Получена информацию о пользователе через GraphQL")
             return user_data
         elif result and 'errors' in result:
             logger.error(f"GraphQL ошибки: {result['errors']}")
@@ -639,48 +615,19 @@ class VirusAPI:
 
         return True, f"{original_name}", False, True
 
-    async def get_balance(self, use_cache: bool = True) -> Tuple[int, int]:
-        """Получает баланс с кэшированием для максимальной производительности"""
+    async def get_balance(self) -> Tuple[int, int]:
+        """Получает баланс"""
 
-        # Проверяем кэш если включен
-        if (BALANCE_CACHE_ENABLED and use_cache and
-            self._balance_cache is not None and self._balance_cache_timestamp is not None):
-
-            cache_age = (datetime.now() - self._balance_cache_timestamp).total_seconds()
-            if cache_age < BALANCE_CACHE_TTL:
-                if not REDUCED_LOGGING_MODE:
-                    logger.debug(f"Используем кэш баланса для {self.session_name} (возраст: {cache_age:.1f}s)")
-                return self._balance_cache['starsBalance'], self._balance_cache['balance']
-
-        # Получаем свежие данные
-        user_info = await self.get_user_info(use_cache=use_cache)
+        user_info = await self.get_user_info()
         if user_info:
             stars_balance = user_info.get('starsBalance', 0)
             balance = user_info.get('balance', 0)
-
-            # Кэшируем результат
-            if BALANCE_CACHE_ENABLED:
-                self._balance_cache = {
-                    'starsBalance': stars_balance,
-                    'balance': balance
-                }
-                self._balance_cache_timestamp = datetime.now()
-
             return stars_balance, balance
         return 0, 0
 
-    async def get_roulette_inventory(self, cursor: Optional[int] = None, limit: int = 10, use_cache: bool = True) -> Optional[Dict]:
-        """Получает инвентарь рулетки точно как в DevTools с кэшированием"""
+    async def get_roulette_inventory(self, cursor: Optional[int] = None, limit: int = 10) -> Optional[Dict]:
+        """Получает инвентарь рулетки точно как в DevTools"""
 
-        # Проверяем кэш если включен и запрашиваем первую страницу
-        if (INVENTORY_CACHE_ENABLED and use_cache and cursor is None and
-            self._inventory_cache is not None and self._inventory_cache_timestamp is not None):
-
-            cache_age = (datetime.now() - self._inventory_cache_timestamp).total_seconds()
-            if cache_age < INVENTORY_CACHE_TTL:
-                if not REDUCED_LOGGING_MODE:
-                    logger.debug(f"Используем кэш инвентаря для {self.session_name} (возраст: {cache_age:.1f}s)")
-                return self._inventory_cache
         # Точно такой же запрос как в DevTools
         query = """
         query getRouletteInventory($limit: Int64!, $cursor: Int64!) {
@@ -765,13 +712,6 @@ class VirusAPI:
         if result and 'data' in result and result['data'] and 'getRouletteInventory' in result['data']:
             inventory_data = result['data']['getRouletteInventory']
             if inventory_data.get('success'):
-                # Кэшируем данные если это первая страница и кэширование включено
-                if INVENTORY_CACHE_ENABLED and cursor is None:
-                    self._inventory_cache = inventory_data
-                    self._inventory_cache_timestamp = datetime.now()
-                    if not REDUCED_LOGGING_MODE:
-                        logger.debug(f"Закэшировали инвентарь для {self.session_name}")
-
                 return inventory_data
             else:
                 logger.error(f"API returned success=false for inventory request")
@@ -869,14 +809,14 @@ class VirusAPI:
 
         try:
             # Получаем текущий баланс активированных звезд
-            stars_balance, _ = await self.get_balance(use_cache=False)
+            stars_balance, _ = await self.get_balance()
 
             # Сканируем инвентарь для подсчета неактивированных звезд
             inventory_stars_value = 0
             cursor = 0
 
             while True:
-                inventory = await self.get_roulette_inventory(cursor=cursor, use_cache=False)
+                inventory = await self.get_roulette_inventory(cursor=cursor)
                 if not inventory or not inventory.get('success'):
                     break
 
@@ -943,25 +883,6 @@ class VirusAPI:
         total_stars_value = 0
         stars_to_activate = []  # Список звезд для активации
         cursor = 0
-
-        # Проверяем статус аккаунта перед активацией
-        try:
-            account_status = await self.get_account_status()
-            logger.info(f"Статус аккаунта {self.session_name}: ready={account_status['ready_for_automation']}, onboarding={account_status['onboarding_required']}")
-
-            if not account_status['ready_for_automation']:
-                if account_status['onboarding_required']:
-                    logger.warning(f"🔧 Аккаунт {self.session_name} требует ручного onboarding: {account_status['required_actions']}")
-                    logger.info(f"Ошибка: {account_status['error_message']}")
-                    return 0, 0, 0
-                else:
-                    logger.error(f"❌ Аккаунт {self.session_name} не готов к работе: {account_status['error_message']}")
-                    return 0, 0, 0
-
-            logger.info(f"✅ Аккаунт {self.session_name} готов к активации звезд")
-
-        except Exception as e:
-            logger.warning(f"Ошибка проверки статуса аккаунта {self.session_name}: {e}")
 
         # ЭТАП 1: Собираем все звезды из инвентаря и считаем сумму
         try:
@@ -1099,7 +1020,7 @@ class VirusAPI:
             temp_cursor = 0
 
             while True:
-                inventory = await self.get_roulette_inventory(cursor=temp_cursor, limit=50, use_cache=True)
+                inventory = await self.get_roulette_inventory(cursor=temp_cursor, limit=50)
                 if not inventory or not inventory.get('success'):
                     break
 
@@ -1143,7 +1064,7 @@ class VirusAPI:
 
             while True:
                 # Получаем страницу инвентаря
-                inventory = await self.get_roulette_inventory(cursor=cursor, limit=50, use_cache=True)
+                inventory = await self.get_roulette_inventory(cursor=cursor, limit=50)
                 if not inventory or not inventory.get('success'):
                     logger.debug(f"Не удалось получить инвентарь для продажи подарков {self.session_name}")
                     break

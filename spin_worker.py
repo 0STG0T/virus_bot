@@ -1000,8 +1000,8 @@ class SpinWorker:
             api = VirusAPI(session_name)
             await api.set_auth_data(auth_data)
 
-            # Используем кэшированную версию для максимальной скорости
-            user_info = await api.get_user_info(use_cache=True)
+            # Получаем информацию о пользователе
+            user_info = await api.get_user_info()
             if user_info:
                 stars_balance = user_info.get('starsBalance', 0)
                 balance = user_info.get('balance', 0)
@@ -1013,7 +1013,7 @@ class SpinWorker:
                 inventory_stars_count = 0  # Количество звезд в инвентаре
                 inventory_stars_value = 0  # Сумма звезд в инвентаре
                 try:
-                    inventory = await api.get_roulette_inventory(cursor=0, limit=50, use_cache=True)
+                    inventory = await api.get_roulette_inventory(cursor=0, limit=50)
 
                     # Упрощенное логирование для производительности
                     if not config.REDUCED_LOGGING_MODE:
@@ -1087,8 +1087,6 @@ class SpinWorker:
                         exchanged_count, _, exchanged_list = await api.auto_exchange_cheap_gifts()
                         if exchanged_count > 0:
                             logger.info(f"Автопродажа при проверке баланса {session_name}: продано {exchanged_count} подарков")
-                            # Обновляем кэш инвентаря после продажи
-                            api._inventory_cache = None
                     except Exception as e:
                         logger.error(f"Ошибка автопродажи подарков при проверке баланса {session_name}: {e}")
 

@@ -14,10 +14,6 @@ class SessionManager:
         self.clients: Dict[str, TelegramClient] = {}
         self.sessions_data: Dict[str, str] = {}
 
-        # Кэш валидации сессий для максимальной производительности
-        self._validation_cache: Dict[str, bool] = {}
-        self._validation_cache_timestamp: Optional[datetime] = None
-
         # Семафор для предотвращения одновременного доступа к SQLite базам
         self._db_access_semaphore = asyncio.Semaphore(10)  # Увеличено для скорости
 
@@ -111,17 +107,8 @@ class SessionManager:
                 return False
         return False
 
-    async def validate_all_sessions(self, use_cache: bool = True) -> Tuple[int, int]:
-        """Валидирует все сессии с кэшированием для максимальной производительности"""
-
-        # Проверяем кэш если включен
-        if (use_cache and self._validation_cache_timestamp is not None):
-            cache_age = (datetime.now() - self._validation_cache_timestamp).total_seconds()
-            if cache_age < config.SESSION_VALIDATION_CACHE_TTL:
-                logger.debug(f"Используем кэш валидации сессий (возраст: {cache_age:.1f}s)")
-                valid_count = sum(1 for is_valid in self._validation_cache.values() if is_valid)
-                invalid_count = len(self._validation_cache) - valid_count
-                return valid_count, invalid_count
+    async def validate_all_sessions(self) -> Tuple[int, int]:
+        """Валидирует все сессии"""
 
         valid_count = 0
         invalid_count = 0
@@ -133,20 +120,15 @@ class SessionManager:
             nonlocal valid_count, invalid_count
             try:
                 is_valid = await self.validate_session(session_name)
-                self._validation_cache[session_name] = is_valid
                 if is_valid:
                     valid_count += 1
                 else:
                     invalid_count += 1
             except:
-                self._validation_cache[session_name] = False
                 invalid_count += 1
 
         tasks = [validate_single(name) for name in self.sessions_data.keys()]
         await asyncio.gather(*tasks, return_exceptions=True)
-
-        # Обновляем время кэша
-        self._validation_cache_timestamp = datetime.now()
 
         return valid_count, invalid_count
 
