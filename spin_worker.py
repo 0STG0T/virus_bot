@@ -206,6 +206,20 @@ class SpinWorker:
                                 else:
                                     logger.info(f"ℹ️ [{session_name}] Попытка #{attempt}: WebApp открылся без init_data")
 
+                                # Регистрируем клик через GraphQL API (как для каналов)
+                                task_id = reward.get('task_id') if isinstance(reward, dict) else None
+
+                                if task_id:
+                                    logger.info(f"🌐 [{session_name}] Попытка #{attempt}: Регистрирую клик WebApp для задачи {task_id}...")
+                                    click_registered, click_message = await api.mark_test_spin_task_click(task_id)
+
+                                    if click_registered:
+                                        logger.info(f"✅ [{session_name}] Попытка #{attempt}: Клик WebApp зарегистрирован: {click_message}")
+                                    else:
+                                        logger.warning(f"⚠️ [{session_name}] Попытка #{attempt}: Не удалось зарегистрировать клик WebApp: {click_message}")
+                                else:
+                                    logger.warning(f"⚠️ [{session_name}] Попытка #{attempt}: task_id не найден в reward для WebApp")
+
                                 logger.info(f"🔗 [{session_name}] Попытка #{attempt}: Жду 2 секунды перед повторным спином...")
                                 await asyncio.sleep(2)
                                 logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после клика...")
