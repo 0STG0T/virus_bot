@@ -7,6 +7,9 @@ sessions/
 *.log
 logs/
 
+# Отчеты
+reports/
+
 # Python
 __pycache__/
 *.py[cod]

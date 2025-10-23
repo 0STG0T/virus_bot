@@ -803,9 +803,16 @@ class VirusAPI:
     async def should_activate_stars(self) -> Tuple[bool, int, int, int, str]:
         """
         ТОЛЬКО ПРОВЕРЯЕТ нужна ли активация звезд, БЕЗ САМОЙ АКТИВАЦИИ
+
+        Логика:
+        - Копим 200⭐ в инвентаре
+        - Когда >= 200⭐ в инвентаре → активируем ВСЕ
+        - Делаем платный спин
+        - Повторяем с 0
+
         Возвращает: (нужна_активация, активных_звезд_на_балансе, неактивированных_в_инвентаре, можно_активировать, причина)
         """
-        MIN_INVENTORY_STARS = 100
+        PAID_SPIN_COST = 200  # Стоимость платного спина
 
         try:
             # Получаем текущий баланс активированных звезд
@@ -851,47 +858,55 @@ class VirusAPI:
                 if not cursor:
                     break
 
-            # Определяем нужна ли активация
-            # Активируем ТОЛЬКО если после активации останется > 100⭐ в инвентаре
-            if inventory_stars_value <= MIN_INVENTORY_STARS:
-                reason = f"в инвентаре {inventory_stars_value}⭐ <= {MIN_INVENTORY_STARS}⭐"
+            # Проверяем: уже есть >= 200⭐ на балансе?
+            if stars_balance >= PAID_SPIN_COST:
+                reason = f"баланс уже {stars_balance}⭐ >= {PAID_SPIN_COST}⭐"
                 return False, stars_balance, inventory_stars_value, 0, reason
-            else:
-                # Можем активировать: inventory_stars_value - MIN_INVENTORY_STARS
-                # Оставляем СТРОГО > 100⭐ в инвентаре
-                can_activate = inventory_stars_value - MIN_INVENTORY_STARS
-                reason = f"в инвентаре {inventory_stars_value}⭐ > {MIN_INVENTORY_STARS}⭐"
-                return True, stars_balance, inventory_stars_value, can_activate, reason
+
+            # Проверяем: есть >= 200⭐ в инвентаре?
+            if inventory_stars_value < PAID_SPIN_COST:
+                reason = f"в инвентаре {inventory_stars_value}⭐ < {PAID_SPIN_COST}⭐"
+                return False, stars_balance, inventory_stars_value, 0, reason
+
+            # Активируем ВСЕ звезды из инвентаря
+            reason = f"в инвентаре {inventory_stars_value}⭐ >= {PAID_SPIN_COST}⭐, активируем ВСЕ"
+            return True, stars_balance, inventory_stars_value, inventory_stars_value, reason
 
         except Exception as e:
             logger.error(f"Ошибка проверки необходимости активации для {self.session_name}: {e}")
             return False, 0, 0, 0, f"ошибка: {str(e)}"
 
-    async def activate_all_stars(self) -> Tuple[int, int]:
+    async def activate_all_stars(self) -> Tuple[int, int, int]:
         """
-        Активирует звезды из инвентаря, оставляя минимум 100⭐ в инвентаре.
+        Активирует ВСЕ звезды из инвентаря для платного спина.
+
         Логика:
-        - Если в ИНВЕНТАРЕ < 100⭐: НЕ активирует НИЧЕГО
-        - Если в ИНВЕНТАРЕ > 100⭐: активирует максимум, оставляя СТРОГО > 100⭐ в инвентаре
-        - Причина: нужно >= 100⭐ в инвентаре для лучшей вероятности ценных подарков
-        Возвращает (активировано, всего_найдено, total_stars_value)
+        - Копим 200⭐ в инвентаре
+        - Когда >= 200⭐ → активируем ВСЕ звезды
+        - Делаем платный спин
+        - Повторяем с 0
+
+        Возвращает: (активировано_штук, всего_найдено_штук, активировано_значение_звезд)
         """
-        MIN_INVENTORY_STARS = 100  # Минимум звезд, которые ВСЕГДА должны оставаться в инвентаре
+        PAID_SPIN_COST = 200  # Стоимость платного спина
 
         activated_count = 0
         total_stars_found = 0
         total_stars_value = 0
-        stars_to_activate = []  # Список звезд для активации
+        stars_to_activate = []
         cursor = 0
 
-        # ЭТАП 1: Собираем все звезды из инвентаря и считаем сумму
+        # Получаем текущий баланс
+        current_balance, _ = await self.get_balance()
+
+        # ЭТАП 1: Собираем ВСЕ звезды из инвентаря
         try:
-            logger.info(f"🔍 Сканирую инвентарь для подсчета звезд для {self.session_name}...")
+            logger.info(f"🔍 Сканирую инвентарь для активации звезд для {self.session_name}...")
 
             while True:
                 inventory = await self.get_roulette_inventory(cursor=cursor)
                 if not inventory or not inventory.get('success'):
-                    logger.warning(f"Не удалось получить инвентарь или success=false для {self.session_name}")
+                    logger.warning(f"Не удалось получить инвентарь для {self.session_name}")
                     break
 
                 prizes = inventory.get('prizes')
@@ -914,11 +929,10 @@ class VirusAPI:
                     if is_stars and is_claimable:
                         user_roulette_prize_id = prize_item.get('userRoulettePrizeId')
 
-                        # Пытаемся извлечь количество звезд из названия
+                        # Извлекаем количество звезд из названия
                         star_value = 0
                         name_to_parse = inner_prize_name or prize_name
 
-                        # Ищем числа в названии типа "50 Stars", "100 stars"
                         import re
                         numbers = re.findall(r'\d+', name_to_parse)
                         if numbers:
@@ -933,8 +947,6 @@ class VirusAPI:
                             'value': star_value
                         })
 
-                        logger.debug(f"🌟 Найдены звезды: {name_to_parse} (значение: {star_value}) для {self.session_name}")
-
                 if not inventory.get('hasNextPage', False):
                     break
 
@@ -946,25 +958,23 @@ class VirusAPI:
             logger.error(f"Ошибка при сканировании инвентаря для {self.session_name}: {e}")
             return 0, 0, 0
 
-        # ЭТАП 2: Проверяем порог и активируем минимум, оставляя >= 100
-        logger.info(f"📊 Итого найдено звезд в инвентаре для {self.session_name}: {total_stars_found} шт. на сумму ~{total_stars_value}⭐")
+        # ЭТАП 2: Проверяем условия и активируем ВСЕ
+        logger.info(f"📊 {self.session_name}: баланс {current_balance}⭐, инвентарь {total_stars_value}⭐")
 
-        if total_stars_value < MIN_INVENTORY_STARS:
-            logger.info(f"⏸️ Звезд меньше {MIN_INVENTORY_STARS} ({total_stars_value}⭐), активация отложена для {self.session_name}")
-            logger.info(f"💡 Для активации нужно >= {MIN_INVENTORY_STARS}⭐ в инвентаре")
-            return 0, total_stars_found, total_stars_value
+        # Проверка 1: Уже есть 200⭐ на балансе?
+        if current_balance >= PAID_SPIN_COST:
+            logger.info(f"⏸️ {self.session_name}: баланс уже {current_balance}⭐ >= 200⭐, активация не нужна")
+            return 0, total_stars_found, 0
 
-        # Вычисляем сколько нужно активировать, чтобы оставить минимум MIN_INVENTORY_STARS
-        # Активируем минимум звезд, чтобы в инвентаре осталось >= 100⭐
-        logger.info(f"✅ Звезд >= {MIN_INVENTORY_STARS} ({total_stars_value}⭐), будем активировать минимум звезд, оставляя >= {MIN_INVENTORY_STARS}⭐ в инвентаре")
+        # Проверка 2: Есть >= 200⭐ в инвентаре?
+        if total_stars_value < PAID_SPIN_COST:
+            logger.info(f"⏸️ {self.session_name}: инвентарь {total_stars_value}⭐ < 200⭐, продолжаем копить")
+            return 0, total_stars_found, 0
 
-        # Сортируем звезды по ВОЗРАСТАНИЮ стоимости (активируем сначала мелкие пачки)
-        # Это позволит оставить ровно >= 100⭐ в инвентаре
-        stars_to_activate.sort(key=lambda x: x['value'], reverse=False)
+        # Активируем ВСЕ звезды!
+        logger.info(f"✅ {self.session_name}: инвентарь {total_stars_value}⭐ >= 200⭐, активирую ВСЕ звезды!")
 
-        # Активируем звезды пока не достигнем порога (оставив >= MIN_INVENTORY_STARS в инвентаре)
         activated_value = 0
-        remaining_value = total_stars_value
 
         try:
             for star_item in stars_to_activate:
@@ -972,35 +982,31 @@ class VirusAPI:
                 star_name = star_item['name']
                 star_value = star_item['value']
 
-                # Проверяем: если активируем эту пачку, останется ли >= MIN_INVENTORY_STARS?
-                if remaining_value - star_value >= MIN_INVENTORY_STARS:
-                    # Можем активировать эту пачку
-                    if user_roulette_prize_id:
-                        success, message = await self.claim_roulette_prize(user_roulette_prize_id)
-                        if success:
-                            activated_count += 1
-                            activated_value += star_value
-                            remaining_value -= star_value
-                            logger.info(f"✅ Активированы звезды: {star_name} ({star_value}⭐) для {self.session_name}, осталось ~{remaining_value}⭐ в инвентаре")
-                        else:
-                            logger.warning(f"⚠️ Не удалось активировать звезды {star_name} для {self.session_name}: {message}")
+                # Активируем эту пачку
+                if user_roulette_prize_id:
+                    success, message = await self.claim_roulette_prize(user_roulette_prize_id)
+                    if success:
+                        activated_count += 1
+                        activated_value += star_value
+                        logger.info(f"✅ Активированы: {star_name} ({star_value}⭐) для {self.session_name}")
+                    else:
+                        logger.warning(f"⚠️ Не удалось активировать {star_name} для {self.session_name}: {message}")
 
-                        await asyncio.sleep(PRIZE_ACTIVATION_DELAY)
-                else:
-                    # Активация этой пачки приведет к тому, что в инвентаре останется < MIN_INVENTORY_STARS
-                    logger.debug(f"⏭️ Пропускаем {star_name} ({star_value}⭐), чтобы сохранить >= {MIN_INVENTORY_STARS}⭐ в инвентаре (осталось {remaining_value}⭐)")
+                    await asyncio.sleep(PRIZE_ACTIVATION_DELAY)
 
         except Exception as e:
             logger.error(f"Ошибка активации звезд для {self.session_name}: {e}")
 
-        logger.info(f"🎉 Активация завершена для {self.session_name}: активировано {activated_count} шт. на ~{activated_value}⭐")
-        logger.info(f"📦 В инвентаре осталось ~{remaining_value}⭐ (>= {MIN_INVENTORY_STARS}⭐)")
-        return activated_count, total_stars_found, total_stars_value
+        new_balance = current_balance + activated_value
+
+        logger.info(f"🎉 {self.session_name}: активировано {activated_count} шт. на {activated_value}⭐")
+        logger.info(f"💰 {self.session_name}: баланс теперь {new_balance}⭐, инвентарь очищен")
+
+        return activated_count, total_stars_found, activated_value
 
     async def auto_exchange_cheap_gifts(self) -> Tuple[int, int, List[str]]:
         """
         Автоматически продает подарки ≤ пороговой стоимости
-        ТОЛЬКО если в инвентаре > 100 неактивированных звезд
         Возвращает: (продано_подарков, всего_найдено, список_проданных)
         """
         if not AUTO_GIFT_EXCHANGE_ENABLED:
@@ -1010,57 +1016,9 @@ class VirusAPI:
         total_gifts_found = 0
         exchanged_gifts = []
         cursor = 0
-        MIN_INVENTORY_STARS = 100  # Минимум звезд в инвентаре для начала продажи
 
         try:
             logger.info(f"🔍 Начинаем автопродажу подарков для {self.session_name} (порог: {AUTO_GIFT_EXCHANGE_THRESHOLD}⭐)")
-
-            # ЭТАП 1: Сначала проверяем сколько неактивированных звезд в инвентаре
-            inventory_stars_value = 0
-            temp_cursor = 0
-
-            while True:
-                inventory = await self.get_roulette_inventory(cursor=temp_cursor, limit=50)
-                if not inventory or not inventory.get('success'):
-                    break
-
-                prizes = inventory.get('prizes')
-                if not prizes:
-                    break
-
-                for prize_item in prizes:
-                    status = prize_item.get('status')
-                    if status != 'NONE':
-                        continue
-
-                    prize = prize_item.get('prize', {})
-                    prize_name = prize.get('name', '').lower()
-
-                    # Считаем только неактивированные звезды (status='NONE')
-                    if 'stars' in prize_name or 'star' in prize_name:
-                        # Извлекаем количество звезд
-                        import re
-                        numbers = re.findall(r'\d+', prize_name)
-                        if numbers:
-                            inventory_stars_value += int(numbers[0])
-
-                if not inventory.get('hasNextPage'):
-                    break
-
-                next_cursor = inventory.get('nextCursor')
-                if next_cursor is None:
-                    break
-
-                temp_cursor = next_cursor
-
-            logger.info(f"📊 Неактивированных звезд в инвентаре: {inventory_stars_value}⭐ для {self.session_name}")
-
-            # ЭТАП 2: Если звезд < 100 - не продаем подарки
-            if inventory_stars_value <= MIN_INVENTORY_STARS:
-                logger.info(f"⏸️ Автопродажа подарков отложена для {self.session_name}: в инвентаре {inventory_stars_value}⭐ (<= {MIN_INVENTORY_STARS}⭐)")
-                return 0, 0, []
-
-            logger.info(f"✅ Достаточно звезд в инвентаре ({inventory_stars_value}⭐ > {MIN_INVENTORY_STARS}⭐), начинаем автопродажу подарков")
 
             while True:
                 # Получаем страницу инвентаря

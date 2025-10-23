@@ -108,24 +108,26 @@ class SessionManager:
         return False
 
     async def validate_all_sessions(self) -> Tuple[int, int]:
-        """Валидирует все сессии"""
+        """Валидирует все сессии с ограничением параллельных подключений"""
 
         valid_count = 0
         invalid_count = 0
 
-        # Убираем семафор - выполняем все операции параллельно без ограничений
-        # для максимальной скорости
+        # Ограничиваем до 50 параллельных валидаций для стабильности
+        semaphore = asyncio.Semaphore(50)
 
         async def validate_single(session_name: str):
             nonlocal valid_count, invalid_count
-            try:
-                is_valid = await self.validate_session(session_name)
-                if is_valid:
-                    valid_count += 1
-                else:
+            async with semaphore:
+                try:
+                    is_valid = await self.validate_session(session_name)
+                    if is_valid:
+                        valid_count += 1
+                    else:
+                        invalid_count += 1
+                except Exception as e:
+                    logger.debug(f"Ошибка валидации {session_name}: {e}")
                     invalid_count += 1
-            except:
-                invalid_count += 1
 
         tasks = [validate_single(name) for name in self.sessions_data.keys()]
         await asyncio.gather(*tasks, return_exceptions=True)

@@ -351,8 +351,45 @@ class SpinWorker:
                     logger.info(f"✅ Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name}")
                     result['stars_activated'] = activated_count
                     result['stars_value_activated'] = stars_value
+
+                    # НОВАЯ ЛОГИКА: Если активировали звезды (значит достигли 200⭐ на балансе)
+                    # то сразу делаем автоматический платный спин
+                    logger.info(f"🎰 {session_name}: баланс достиг 200⭐, делаю автоматический платный спин...")
+
+                    # Отправляем уведомление об активации
+                    if self.notification_callback:
+                        notification_text = f"💎 АКТИВАЦИЯ | {session_name}\n"
+                        notification_text += f"Активировано ВСЕ: {stars_value}⭐\n"
+                        notification_text += f"🎰 Автоматический платный спин..."
+                        await self.notification_callback(notification_text)
+
+                    # Делаем платный спин
+                    try:
+                        paid_spin_success, paid_spin_message, paid_spin_reward = await api.perform_paid_spin()
+
+                        if paid_spin_success:
+                            logger.info(f"✅ Автоплатный спин {session_name}: {paid_spin_message}")
+
+                            # Отправляем уведомление о результате платного спина
+                            if self.notification_callback:
+                                if paid_spin_reward:
+                                    await self.notification_callback(
+                                        f"🎁 АВТО ПЛАТНЫЙ СПИН | {session_name} | {paid_spin_reward}"
+                                    )
+
+                            result['auto_paid_spin'] = True
+                            result['auto_paid_spin_reward'] = paid_spin_reward
+                        else:
+                            logger.warning(f"⚠️ Автоплатный спин {session_name} неудачен: {paid_spin_message}")
+                            result['auto_paid_spin'] = False
+                            result['auto_paid_spin_error'] = paid_spin_message
+
+                    except Exception as e:
+                        logger.error(f"Ошибка автоматического платного спина для {session_name}: {e}")
+                        result['auto_paid_spin_error'] = str(e)
+
                 elif total_found > 0:
-                    logger.info(f"⏸️ Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре <= 100⭐)")
+                    logger.info(f"⏸️ Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name}")
             except Exception as e:
                 logger.error(f"Ошибка активации звезд для {session_name}: {e}")
 

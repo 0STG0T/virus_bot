@@ -83,8 +83,13 @@ class VirusBotManager:
             except Exception as e:
                 logger.error(f"Ошибка отправки уведомления: {e}")
 
-    async def get_account_stats(self) -> Dict[str, Any]:
-        """Получает быструю статистику по аккаунтам"""
+    async def get_account_stats(self, force_validate: bool = False) -> Dict[str, Any]:
+        """Получает быструю статистику по аккаунтам
+
+        Args:
+            force_validate: Если True - выполняет полную валидацию всех сессий.
+                          Если False - показывает только количество файлов (быстро)
+        """
         try:
             session_names = await self.session_manager.get_session_names()
             total_accounts = len(session_names)
@@ -96,12 +101,22 @@ class VirusBotManager:
                     'issues': 0,
                     'ready_percent': 0,
                     'issues_percent': 0,
-                    'last_update': datetime.now().strftime("%H:%M")
+                    'last_update': datetime.now().strftime("%H:%M"),
+                    'validated': True
                 }
 
-            # Для быстрой статистики проверяем только доступность сессий
-            # Полная проверка будет при вызове конкретных операций
-            valid_count, invalid_count = await self.session_manager.validate_all_sessions()
+            # Для быстрого старта НЕ валидируем все сессии
+            # Валидация происходит только при явном запросе или первой операции
+            if force_validate:
+                logger.info(f"🔍 Полная валидация {total_accounts} сессий...")
+                valid_count, invalid_count = await self.session_manager.validate_all_sessions()
+                validated = True
+            else:
+                # Показываем общее количество без валидации (мгновенно)
+                logger.info(f"📊 Быстрая статистика: найдено {total_accounts} сессий (без валидации)")
+                valid_count = total_accounts
+                invalid_count = 0
+                validated = False
 
             ready_percent = int((valid_count / total_accounts) * 100) if total_accounts > 0 else 0
             issues_percent = int((invalid_count / total_accounts) * 100) if total_accounts > 0 else 0
@@ -112,7 +127,8 @@ class VirusBotManager:
                 'issues': invalid_count,
                 'ready_percent': ready_percent,
                 'issues_percent': issues_percent,
-                'last_update': datetime.now().strftime("%H:%M")
+                'last_update': datetime.now().strftime("%H:%M"),
+                'validated': validated
             }
 
             # Добавляем информацию о подарках из последней операции проверки баланса, если есть
@@ -148,6 +164,14 @@ class VirusBotManager:
 
         if stats['total'] == 0:
             return f"🤖 Virus Bot Manager\n\n📭 Нет загруженных аккаунтов\n\nПоследнее обновление: {stats['last_update']}"
+
+        # Если статистика не валидирована - показываем только общее количество
+        if not stats.get('validated', True):
+            message = f"🤖 Virus Bot Manager\n\n"
+            message += f"📊 Всего аккаунтов: {stats['total']}\n"
+            message += f"ℹ️ Статус будет проверен при первой операции\n"
+            message += f"\n⏰ Обновлено: {stats['last_update']}"
+            return message
 
         status_emoji = "🟢" if stats['ready_percent'] >= 90 else "🟡" if stats['ready_percent'] >= 70 else "🔴"
 
@@ -757,27 +781,61 @@ class VirusBotManager:
                 error_msg = result.get('message', 'Неизвестная ошибка')
                 report_lines.append(f"❌ {session_name}: {error_msg}")
 
-        # Разбиваем отчет на части если он слишком длинный
-        report = f"📋 {self.get_action_name(action)} - Детальные результаты\n"
-        report += f"⏰ {timestamp}\n\n"
+        # Формируем заголовок отчета
+        report_header = f"📋 {self.get_action_name(action)} - Детальные результаты\n"
+        report_header += f"⏰ {timestamp}\n\n"
 
-        max_length = 3800  # Оставляем место для кнопок
-        current_report = report
+        total_accounts = len(report_lines)
 
-        for line in report_lines:
-            if len(current_report + line + "\n") > max_length:
-                newline_count = len(current_report.split('\n'))
-                remaining = len(report_lines) - newline_count + 3
-                current_report += f"\n... и еще {remaining} результатов"
-                break
-            current_report += line + "\n"
+        # Если аккаунтов больше 20 - сохраняем полный отчет в файл
+        if total_accounts > 20:
+            # Создаем полный отчет для файла
+            full_report = report_header + "\n".join(report_lines)
 
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]]
+            # Сохраняем в файл
+            import os
+            os.makedirs("reports", exist_ok=True)
 
-        await query.edit_message_text(
-            current_report,
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+            filename = f"reports/report_{action}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(full_report)
+
+            # Формируем сокращенное сообщение (первые 20)
+            short_report = report_header
+            short_report += f"Показаны первые 20 из {total_accounts} аккаунтов:\n\n"
+            short_report += "\n".join(report_lines[:20])
+            short_report += f"\n\n... и еще {total_accounts - 20} аккаунтов"
+            short_report += f"\n\n📄 Полный отчет сохранен в файл"
+
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]]
+
+            # Сначала отправляем сообщение
+            await query.edit_message_text(
+                short_report,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+
+            # Затем отправляем файл
+            try:
+                with open(filename, 'rb') as f:
+                    await query.message.reply_document(
+                        document=f,
+                        filename=os.path.basename(filename),
+                        caption=f"📊 Полный отчет: {self.get_action_name(action)}\n⏰ {timestamp}"
+                    )
+            except Exception as e:
+                logger.error(f"Ошибка отправки файла: {e}")
+
+        else:
+            # Если аккаунтов <= 20 - показываем все как раньше
+            current_report = report_header + "\n".join(report_lines)
+
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")]]
+
+            await query.edit_message_text(
+                current_report,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
 
     async def back_to_main_menu(self, query):
         """Быстро возвращается к главному меню"""
