@@ -45,12 +45,13 @@ python main.py
 2. Получает WebApp auth data через WebAppAuth
 3. Создает VirusAPI и авторизуется (получает JWT)
 4. Проверяет доступность спина (check_spin_availability)
-5. Если требуются подписки - подписывается на каналы (handle_subscription_requirement)
-6. Если требуется клик по тестовой ссылке - кликает (click_test_spin_url или subscription)
-7. Выполняет спин (perform_spin), до 4 попыток с обработкой ошибок
-8. Обрабатывает награду (process_reward)
-9. Активирует звезды из инвентаря (activate_all_stars)
-10. Автоматически продает дешевые подарки если GIFT_EXCHANGE_AFTER_SPIN=True
+5. Выполняет спин (perform_spin), до 4 попыток с автоматической обработкой ошибок:
+   - **TEST_SPIN_URL_CLICK_REQUIRED**: Определяет тип ссылки (WebApp/channel), кликает, регистрирует через API, повторяет спин
+   - **TELEGRAM_SUBSCRIPTION_REQUIRED**: Извлекает username из сообщения об ошибке, подписывается (публичный канал или invite link), повторяет спин
+   - **BALANCE_REPLENISHMENT_REQUIRED**: Пробует tunnel/portal clicks, task clicks, WebApp ссылки из reward, повторяет спин
+6. Обрабатывает награду (process_reward)
+7. Активирует звезды из инвентаря (activate_all_stars)
+8. Автоматически продает дешевые подарки если GIFT_EXCHANGE_AFTER_SPIN=True
 
 **Платный спин (perform_single_paid_spin)**:
 1. Проверяет баланс >= 200 звезд (can_perform_paid_spin)
@@ -109,16 +110,46 @@ API endpoint: `https://virusgift.pro/api/graphql/query`
 
 ### Error Handling Patterns
 
-**Спин ошибки (perform_spin)**:
-- `TEST_SPIN_URL_CLICK_REQUIRED` - требуется клик по ссылке (может быть WebApp или channel)
-- `TELEGRAM_SUBSCRIPTION_REQUIRED` - требуется подписка на канал
-- `TEST_SPIN_TONNEL_CLICK_REQUIRED` - требуется tunnel click (автоматически обрабатывается в claim_roulette_prize)
-- Portal click required - требуется portal click (автоматически обрабатывается в claim_roulette_prize)
+**Спин ошибки (perform_spin)** - Автоматическая обработка с до 4 попыток:
+
+1. **TEST_SPIN_URL_CLICK_REQUIRED** - Требуется клик по ссылке:
+   - Извлекает ссылку из reward['link']
+   - Определяет тип: WebApp (/dapp, startapp=) или канал
+   - WebApp: открывает через requestWebView, получает init_data, регистрирует через mark_test_spin_task_click
+   - Канал: подписывается через handle_subscription_requirement, регистрирует клик
+   - Ждет 2-5 секунд, повторяет спин
+
+2. **TELEGRAM_SUBSCRIPTION_REQUIRED** - Требуется подписка на канал:
+   - Извлекает @username из сообщения об ошибке через regex
+   - Берет данные из reward (username, url) если есть
+   - Пробует подписку по username (быстрее для публичных каналов)
+   - Fallback: подписка по ссылке (поддерживает приватные invite links)
+   - Ждет 5 секунд, повторяет спин
+   - **Улучшенная обработка**: детальное логирование всех попыток подписки с traceback
+
+3. **BALANCE_REPLENISHMENT_REQUIRED** - Требуется пополнение баланса (НОВОЕ):
+   - Метод 1: Пробует onboarding действия (tunnel click, portal click)
+   - Метод 2: Ищет task_id в reward, вызывает mark_test_spin_task_click
+   - Метод 3: Ищет link в reward, обрабатывает как WebApp
+   - Если успешно - повторяет спин
+   - Если неудачно - логирует детальную информацию для обновления логики
+
+4. **TEST_SPIN_TONNEL_CLICK_REQUIRED** - Требуется tunnel click:
+   - Автоматически обрабатывается в claim_roulette_prize
+
+5. **Portal click required** - Требуется portal click:
+   - Автоматически обрабатывается в claim_roulette_prize
 
 **Обработка ссылок (click_test_spin_url)**:
 - WebApp ссылки (/dapp, startapp=) - открываются через requestWebView, возвращают init_data
 - Канал ссылки (t.me/username) - подписываются через JoinChannelRequest
 - Приватные ссылки (t.me/+hash, t.me/joinchat/hash) - подписываются через ImportChatInviteRequest
+
+**Обработка подписок (handle_subscription_requirement)** - Улучшенная версия:
+- Попытка 1: Подписка по username (очищает @, поддерживает публичные каналы)
+- Попытка 2: Подписка по URL (поддерживает приватные invite links)
+- Детальное логирование всех этапов с типами ошибок и traceback
+- Возвращает True только при успешной подписке
 
 ### Inventory Logic
 

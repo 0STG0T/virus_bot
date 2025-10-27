@@ -29,12 +29,23 @@ class WebAppAuth:
             ))
 
             if hasattr(web_view, 'url') and web_view.url:
-                return self._extract_init_data(web_view.url)
-
-            return None
+                init_data = self._extract_init_data(web_view.url)
+                if not init_data:
+                    logger.warning(f"⚠️ [{self.session_name}] WebApp вернул URL без tgWebAppData")
+                    logger.warning(f"⚠️ [{self.session_name}] URL: {web_view.url[:100] if len(web_view.url) > 100 else web_view.url}")
+                return init_data
+            else:
+                logger.warning(f"⚠️ [{self.session_name}] WebApp не вернул URL")
+                logger.warning(f"⚠️ [{self.session_name}] web_view type: {type(web_view)}")
+                logger.warning(f"⚠️ [{self.session_name}] web_view: {web_view}")
+                return None
 
         except Exception as e:
-            logger.error(f"Ошибка получения WebApp данных для {self.session_name}: {e}")
+            logger.error(f"❌ [{self.session_name}] Ошибка получения WebApp данных:")
+            logger.error(f"   Тип ошибки: {type(e).__name__}")
+            logger.error(f"   Сообщение: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             return None
 
     def _extract_init_data(self, url: str) -> Optional[str]:

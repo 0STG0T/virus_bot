@@ -49,63 +49,78 @@ class SpinWorker:
             username = channel_info.get('username')
             url = channel_info.get('url')
 
-            # СНАЧАЛА пробуем по ссылке (важно для приватных каналов)
-            if url and 't.me/' in url:
-                try:
-                    logger.info(f"Подписываюсь по ссылке: {url}")
+            logger.info(f"🔍 Попытка подписки с данными: username={username}, url={url}")
 
+            # СНАЧАЛА пробуем по username (если есть) - это быстрее для публичных каналов
+            if username:
+                logger.info(f"📡 Попытка 1: Подписываюсь на @{username} по username...")
+                try:
+                    # Очищаем @ если есть
+                    clean_username = username.replace('@', '')
+                    entity = await client.get_entity(f"@{clean_username}")
+                    logger.info(f"✅ Entity получен для @{clean_username}: {entity.id}")
+
+                    await client(JoinChannelRequest(entity))
+                    logger.info(f"✅ Успешно подписался на @{clean_username}")
+                    await asyncio.sleep(SUBSCRIPTION_DELAY)
+                    return True
+                except Exception as e:
+                    logger.warning(f"⚠️ Не удалось подписаться на @{username}: {type(e).__name__}: {e}")
+                    # Продолжаем пробовать другие методы
+
+            # Если username не сработал, пробуем по ссылке
+            if url and 't.me/' in url:
+                logger.info(f"📡 Попытка 2: Подписываюсь по ссылке: {url}")
+                try:
                     # Проверяем тип ссылки
                     if '/+' in url or '/joinchat/' in url:
                         # Приватная ссылка-инвайт
-                        logger.info(f"Обнаружена приватная ссылка-инвайт")
+                        logger.info(f"🔒 Обнаружена приватная ссылка-инвайт")
 
                         # Извлекаем хэш из ссылки
                         # Формат: https://t.me/+HASH или https://t.me/joinchat/HASH
                         if '/+' in url:
-                            invite_hash = url.split('/+')[1].split('?')[0]
+                            invite_hash = url.split('/+')[1].split('?')[0].split('&')[0]
                         else:
-                            invite_hash = url.split('/joinchat/')[1].split('?')[0]
+                            invite_hash = url.split('/joinchat/')[1].split('?')[0].split('&')[0]
 
-                        logger.info(f"Инвайт хэш: {invite_hash}")
+                        logger.info(f"🔑 Инвайт хэш: {invite_hash}")
 
                         # Импортируем функцию для присоединения по инвайту
                         from telethon.tl.functions.messages import ImportChatInviteRequest
 
                         # Присоединяемся по инвайт-ссылке
                         result = await client(ImportChatInviteRequest(invite_hash))
-                        logger.info(f"Успешно присоединился по инвайт-ссылке: {result}")
+                        logger.info(f"✅ Успешно присоединился по инвайт-ссылке: {result}")
                         await asyncio.sleep(SUBSCRIPTION_DELAY)
                         return True
                     else:
                         # Публичная ссылка типа t.me/channel_name
-                        channel_name = url.split('t.me/')[1].split('?')[0].split('/')[0]
+                        channel_name = url.split('t.me/')[1].split('?')[0].split('&')[0].split('/')[0]
+                        logger.info(f"📢 Публичный канал: {channel_name}")
+
                         if channel_name.startswith('@'):
                             entity = await client.get_entity(channel_name)
                         else:
                             entity = await client.get_entity(f"@{channel_name}")
+
+                        logger.info(f"✅ Entity получен: {entity.id}")
                         await client(JoinChannelRequest(entity))
-                        logger.info(f"Успешно подписался через публичную ссылку: {channel_name}")
+                        logger.info(f"✅ Успешно подписался через публичную ссылку: {channel_name}")
                         await asyncio.sleep(SUBSCRIPTION_DELAY)
                         return True
                 except Exception as e:
-                    logger.error(f"Не удалось подписаться по ссылке {url}: {e}")
+                    logger.error(f"❌ Не удалось подписаться по ссылке {url}: {type(e).__name__}: {e}")
+                    import traceback
+                    logger.error(f"   Traceback: {traceback.format_exc()}")
 
-            # Если ссылка не сработала, пробуем по username
-            if username:
-                logger.info(f"Подписываюсь на канал @{username}")
-                try:
-                    entity = await client.get_entity(f"@{username}")
-                    await client(JoinChannelRequest(entity))
-                    logger.info(f"Успешно подписался на @{username}")
-                    await asyncio.sleep(SUBSCRIPTION_DELAY)
-                    return True
-                except Exception as e:
-                    logger.error(f"Не удалось подписаться на @{username}: {e}")
-
+            logger.error(f"❌ Все методы подписки не сработали. username={username}, url={url}")
             return False
 
         except Exception as e:
-            logger.error(f"Ошибка обработки требования подписки: {e}")
+            logger.error(f"❌ Критическая ошибка обработки требования подписки: {type(e).__name__}: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
             return False
 
     async def perform_single_spin(self, session_name: str) -> Dict[str, any]:
@@ -277,25 +292,136 @@ class SpinWorker:
                 # Обработка 2: Требуется подписка на канал
                 elif "Требуется подписка на канал" in spin_message:
                     logger.info(f"📡 [{session_name}] Попытка #{attempt}: Обнаружена ошибка 'Требуется подписка на канал'")
+                    logger.info(f"📡 [{session_name}] Полное сообщение об ошибке: {spin_message}")
+                    logger.info(f"📡 [{session_name}] Тип reward: {type(reward)}, Содержимое: {reward}")
 
+                    # Извлекаем username из сообщения об ошибке
+                    # Формат: "Требуется подписка на канал @username"
+                    import re
+                    username_match = re.search(r'@(\w+)', spin_message)
+                    channel_username = username_match.group(1) if username_match else None
+
+                    if channel_username:
+                        logger.info(f"📡 [{session_name}] Извлечен username из сообщения: @{channel_username}")
+
+                    # Формируем channel_info для подписки
+                    channel_info = {}
+
+                    # Берем данные из reward если есть
                     if isinstance(reward, dict):
-                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Данные подписки: {reward}")
-                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Выполняю подписку на канал...")
+                        channel_info = reward.copy()
+                        logger.info(f"📡 [{session_name}] Данные подписки из reward: {channel_info}")
 
-                        subscription_success = await self.handle_subscription_requirement(client, reward)
-                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Подписка завершена: {subscription_success}")
+                    # Если username извлечен из сообщения - добавляем/переписываем
+                    if channel_username:
+                        channel_info['username'] = channel_username
+                        # Формируем URL если его нет
+                        if 'url' not in channel_info or not channel_info['url']:
+                            channel_info['url'] = f"https://t.me/{channel_username}"
 
-                        if subscription_success:
-                            logger.info(f"📡 [{session_name}] Попытка #{attempt}: Жду 3 секунды для применения подписки...")
-                            await asyncio.sleep(3)
-                            logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после подписки...")
-                            spin_success, spin_message, reward = await api.perform_spin()
-                            logger.info(f"📊 [{session_name}] Попытка #{attempt} результат: success={spin_success}, message='{spin_message}', reward={reward}")
-                            handled = True
-                        else:
-                            logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось подписаться на канал")
+                    if channel_info.get('username') or channel_info.get('url'):
+                        logger.info(f"📡 [{session_name}] Попытка #{attempt}: Выполняю подписку с данными: {channel_info}")
+
+                        try:
+                            subscription_success = await self.handle_subscription_requirement(client, channel_info)
+                            logger.info(f"📡 [{session_name}] Попытка #{attempt}: Подписка завершена: {subscription_success}")
+
+                            if subscription_success:
+                                logger.info(f"📡 [{session_name}] Попытка #{attempt}: Жду 5 секунд для применения подписки...")
+                                await asyncio.sleep(5)
+                                logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после подписки...")
+                                spin_success, spin_message, reward = await api.perform_spin()
+                                logger.info(f"📊 [{session_name}] Попытка #{attempt} результат: success={spin_success}, message='{spin_message}', reward={reward}")
+                                handled = True
+                            else:
+                                logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось подписаться на канал @{channel_username}")
+                        except Exception as e:
+                            logger.error(f"❌ [{session_name}] Ошибка при попытке подписки: {e}")
+                            import traceback
+                            logger.error(f"   Traceback: {traceback.format_exc()}")
                     else:
-                        logger.error(f"❌ [{session_name}] Попытка #{attempt}: reward не является dict: {reward}")
+                        logger.error(f"❌ [{session_name}] Не удалось извлечь данные канала ни из сообщения, ни из reward")
+
+                # Обработка 3: balance replenishment required (НОВОЕ ТРЕБОВАНИЕ)
+                elif "balance replenishment required" in spin_message.lower():
+                    logger.warning(f"💰 [{session_name}] Попытка #{attempt}: НОВОЕ ТРЕБОВАНИЕ 'balance replenishment required'")
+                    logger.warning(f"💰 [{session_name}] Полное сообщение: {spin_message}")
+                    logger.warning(f"💰 [{session_name}] Тип reward: {type(reward)}, Содержимое: {reward}")
+
+                    # Пробуем разные методы для выполнения требования
+                    replenishment_handled = False
+
+                    # Метод 1: Проверяем и выполняем onboarding действия (tunnel, portal)
+                    try:
+                        logger.info(f"💰 [{session_name}] Попытка 1: Пробую отметить tunnel click...")
+                        tunnel_success = await api.mark_test_spin_tonnel_click()
+                        logger.info(f"💰 [{session_name}] Tunnel click: {tunnel_success}")
+
+                        logger.info(f"💰 [{session_name}] Попытка 2: Пробую отметить portal click...")
+                        portal_success = await api.mark_test_spin_portal_click()
+                        logger.info(f"💰 [{session_name}] Portal click: {portal_success}")
+
+                        if tunnel_success or portal_success:
+                            logger.info(f"✅ [{session_name}] Onboarding действия выполнены, повторяю спин...")
+                            await asyncio.sleep(3)
+                            spin_success, spin_message, reward = await api.perform_spin()
+                            logger.info(f"📊 [{session_name}] Попытка #{attempt} результат после onboarding: success={spin_success}, message='{spin_message}'")
+                            if spin_success:
+                                replenishment_handled = True
+                                handled = True
+                    except Exception as e:
+                        logger.warning(f"⚠️ [{session_name}] Ошибка при попытке onboarding: {e}")
+
+                    # Метод 2: Проверяем данные в reward/extensions
+                    if not replenishment_handled and isinstance(reward, dict):
+                        logger.info(f"💰 [{session_name}] Анализирую данные в reward для определения требования...")
+
+                        # Проверяем наличие task_id или других подсказок
+                        if 'task_id' in reward:
+                            try:
+                                task_id = reward['task_id']
+                                logger.info(f"💰 [{session_name}] Найден task_id: {task_id}, пробую отметить...")
+                                task_click_success, task_message = await api.mark_test_spin_task_click(task_id)
+                                logger.info(f"💰 [{session_name}] Task click результат: {task_click_success}, {task_message}")
+
+                                if task_click_success:
+                                    await asyncio.sleep(3)
+                                    spin_success, spin_message, reward = await api.perform_spin()
+                                    logger.info(f"📊 [{session_name}] Попытка #{attempt} результат после task: success={spin_success}, message='{spin_message}'")
+                                    if spin_success:
+                                        replenishment_handled = True
+                                        handled = True
+                            except Exception as e:
+                                logger.warning(f"⚠️ [{session_name}] Ошибка при попытке task click: {e}")
+
+                        # Проверяем наличие ссылки
+                        if not replenishment_handled and 'link' in reward:
+                            try:
+                                link = reward['link']
+                                logger.info(f"💰 [{session_name}] Найдена ссылка: {link}, пробую обработать...")
+
+                                # Если это WebApp ссылка
+                                if '/dapp' in link or 'startapp=' in link:
+                                    logger.info(f"💰 [{session_name}] Обнаружен WebApp, выполняю клик...")
+                                    click_success, init_data = await auth.click_test_spin_url(link)
+                                    if click_success:
+                                        await asyncio.sleep(5)
+                                        spin_success, spin_message, reward = await api.perform_spin()
+                                        logger.info(f"📊 [{session_name}] Попытка #{attempt} результат после WebApp: success={spin_success}, message='{spin_message}'")
+                                        if spin_success:
+                                            replenishment_handled = True
+                                            handled = True
+                            except Exception as e:
+                                logger.warning(f"⚠️ [{session_name}] Ошибка при попытке обработки ссылки: {e}")
+
+                    if not replenishment_handled:
+                        logger.error(f"❌ [{session_name}] Не удалось автоматически обработать 'balance replenishment required'")
+                        logger.error(f"💰 [{session_name}] Требуется ручное вмешательство или обновление логики бота")
+                        logger.error(f"💰 [{session_name}] Данные для анализа: message='{spin_message}', reward={reward}")
+                        # Не помечаем handled=True, чтобы выйти из цикла с понятной ошибкой
+                        break
+                    else:
+                        logger.info(f"✅ [{session_name}] 'balance replenishment required' успешно обработан!")
 
                 # Если ошибка не была обработана - выходим
                 if not handled:

@@ -470,6 +470,16 @@ class VirusAPI:
                 # Возвращаем как ошибку клика, даже если нет ссылки в extensions
                 return False, f"Требуется клик по тестовой ссылке", extensions if extensions else {}
 
+            # НОВАЯ ОБРАБОТКА: balance replenishment required
+            if "balance replenishment required" in message.lower() or extensions.get('code') == 'BALANCE_REPLENISHMENT_REQUIRED':
+                logger.warning(f"💰 [{self.session_name}] Требуется пополнение баланса (НОВОЕ ТРЕБОВАНИЕ):")
+                logger.warning(f"   📝 Message: {message}")
+                logger.warning(f"   📦 Extensions: {extensions}")
+                logger.warning(f"   🔍 Полный result для отладки: {result}")
+
+                # Возвращаем специальную ошибку для дальнейшей обработки
+                return False, f"balance replenishment required", extensions
+
             return False, message, None
 
         else:
