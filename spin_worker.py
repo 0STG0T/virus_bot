@@ -44,81 +44,115 @@ class SpinWorker:
             return False, f"Ошибка: {str(e)}"
 
     async def handle_subscription_requirement(self, client, channel_info: Dict) -> bool:
-        """Обрабатывает требование подписки на канал"""
+        """Обрабатывает требование подписки на канал - пробует ВСЕ возможные методы"""
         try:
             username = channel_info.get('username')
             url = channel_info.get('url')
+            any_success = False  # Флаг успеха хотя бы одного метода
 
-            logger.info(f"🔍 Попытка подписки с данными: username={username}, url={url}")
+            logger.info(f"🔍 Попытка обработки требования с данными: username={username}, url={url}")
 
-            # СНАЧАЛА пробуем по username (если есть) - это быстрее для публичных каналов
+            # МЕТОД 1: Пробуем подписаться по username на канал
             if username:
-                logger.info(f"📡 Попытка 1: Подписываюсь на @{username} по username...")
+                logger.info(f"📡 Метод 1: Подписка на @{username} по username...")
                 try:
-                    # Очищаем @ если есть
                     clean_username = username.replace('@', '')
                     entity = await client.get_entity(f"@{clean_username}")
-                    logger.info(f"✅ Entity получен для @{clean_username}: {entity.id}")
+                    logger.info(f"✅ Entity получен для @{clean_username}: {entity.id}, тип: {type(entity).__name__}")
 
-                    await client(JoinChannelRequest(entity))
-                    logger.info(f"✅ Успешно подписался на @{clean_username}")
-                    await asyncio.sleep(SUBSCRIPTION_DELAY)
-                    return True
+                    from telethon.tl.types import Channel, User
+
+                    if isinstance(entity, Channel):
+                        await client(JoinChannelRequest(entity))
+                        logger.info(f"✅ Метод 1: Успешно подписался на канал @{clean_username}")
+                        any_success = True
+                        await asyncio.sleep(2)
+                    elif isinstance(entity, User):
+                        logger.info(f"ℹ️ Метод 1: @{clean_username} - это бот/пользователь, пробую запустить...")
+                        # Пробуем запустить бота
+                        try:
+                            await client.send_message(entity, '/start')
+                            logger.info(f"✅ Метод 1: Отправил /start боту @{clean_username}")
+                            any_success = True
+                            await asyncio.sleep(2)
+                        except Exception as start_error:
+                            logger.warning(f"⚠️ Метод 1: Не удалось запустить бота: {start_error}")
                 except Exception as e:
-                    logger.warning(f"⚠️ Не удалось подписаться на @{username}: {type(e).__name__}: {e}")
-                    # Продолжаем пробовать другие методы
+                    logger.warning(f"⚠️ Метод 1: Не удалось обработать @{username}: {type(e).__name__}: {e}")
 
-            # Если username не сработал, пробуем по ссылке
+            # МЕТОД 2: Пробуем обработать по URL
             if url and 't.me/' in url:
-                logger.info(f"📡 Попытка 2: Подписываюсь по ссылке: {url}")
+                logger.info(f"📡 Метод 2: Обработка по ссылке: {url}")
                 try:
-                    # Проверяем тип ссылки
+                    # Вариант 2.1: Приватная invite ссылка
                     if '/+' in url or '/joinchat/' in url:
-                        # Приватная ссылка-инвайт
-                        logger.info(f"🔒 Обнаружена приватная ссылка-инвайт")
-
-                        # Извлекаем хэш из ссылки
-                        # Формат: https://t.me/+HASH или https://t.me/joinchat/HASH
+                        logger.info(f"🔒 Метод 2.1: Приватная ссылка-инвайт")
                         if '/+' in url:
                             invite_hash = url.split('/+')[1].split('?')[0].split('&')[0]
                         else:
                             invite_hash = url.split('/joinchat/')[1].split('?')[0].split('&')[0]
 
-                        logger.info(f"🔑 Инвайт хэш: {invite_hash}")
-
-                        # Импортируем функцию для присоединения по инвайту
                         from telethon.tl.functions.messages import ImportChatInviteRequest
-
-                        # Присоединяемся по инвайт-ссылке
                         result = await client(ImportChatInviteRequest(invite_hash))
-                        logger.info(f"✅ Успешно присоединился по инвайт-ссылке: {result}")
-                        await asyncio.sleep(SUBSCRIPTION_DELAY)
-                        return True
+                        logger.info(f"✅ Метод 2.1: Успешно присоединился по invite: {result}")
+                        any_success = True
+                        await asyncio.sleep(2)
+
+                    # Вариант 2.2: Ссылка на бота с параметром start
+                    elif '?start=' in url or '&start=' in url:
+                        logger.info(f"🤖 Метод 2.2: Ссылка на бота с параметром start")
+                        bot_username = url.split('t.me/')[1].split('?')[0].split('&')[0]
+                        start_param = ''
+                        if '?start=' in url:
+                            start_param = url.split('?start=')[1].split('&')[0]
+                        elif '&start=' in url:
+                            start_param = url.split('&start=')[1].split('&')[0]
+
+                        logger.info(f"🤖 Метод 2.2: Запускаю бота @{bot_username} с параметром: {start_param}")
+                        bot_entity = await client.get_entity(f"@{bot_username}")
+                        await client.send_message(bot_entity, f'/start {start_param}')
+                        logger.info(f"✅ Метод 2.2: Бот запущен")
+                        any_success = True
+                        await asyncio.sleep(2)
+
+                    # Вариант 2.3: Публичный канал
                     else:
-                        # Публичная ссылка типа t.me/channel_name
+                        logger.info(f"📢 Метод 2.3: Публичная ссылка на канал")
                         channel_name = url.split('t.me/')[1].split('?')[0].split('&')[0].split('/')[0]
-                        logger.info(f"📢 Публичный канал: {channel_name}")
 
                         if channel_name.startswith('@'):
                             entity = await client.get_entity(channel_name)
                         else:
                             entity = await client.get_entity(f"@{channel_name}")
 
-                        logger.info(f"✅ Entity получен: {entity.id}")
-                        await client(JoinChannelRequest(entity))
-                        logger.info(f"✅ Успешно подписался через публичную ссылку: {channel_name}")
-                        await asyncio.sleep(SUBSCRIPTION_DELAY)
-                        return True
-                except Exception as e:
-                    logger.error(f"❌ Не удалось подписаться по ссылке {url}: {type(e).__name__}: {e}")
-                    import traceback
-                    logger.error(f"   Traceback: {traceback.format_exc()}")
+                        logger.info(f"✅ Entity получен: {entity.id}, тип: {type(entity).__name__}")
 
-            logger.error(f"❌ Все методы подписки не сработали. username={username}, url={url}")
-            return False
+                        from telethon.tl.types import Channel, User
+
+                        if isinstance(entity, Channel):
+                            await client(JoinChannelRequest(entity))
+                            logger.info(f"✅ Метод 2.3: Успешно подписался на канал {channel_name}")
+                            any_success = True
+                            await asyncio.sleep(2)
+                        elif isinstance(entity, User):
+                            logger.info(f"🤖 Метод 2.3: Это бот, отправляю /start")
+                            await client.send_message(entity, '/start')
+                            logger.info(f"✅ Метод 2.3: Бот запущен")
+                            any_success = True
+                            await asyncio.sleep(2)
+
+                except Exception as e:
+                    logger.warning(f"⚠️ Метод 2: Не удалось обработать ссылку {url}: {type(e).__name__}: {e}")
+
+            if any_success:
+                logger.info(f"✅ Хотя бы один метод сработал успешно!")
+                return True
+            else:
+                logger.error(f"❌ Все методы не сработали. username={username}, url={url}")
+                return False
 
         except Exception as e:
-            logger.error(f"❌ Критическая ошибка обработки требования подписки: {type(e).__name__}: {e}")
+            logger.error(f"❌ Критическая ошибка обработки требования: {type(e).__name__}: {e}")
             import traceback
             logger.error(f"   Traceback: {traceback.format_exc()}")
             return False
@@ -324,19 +358,19 @@ class SpinWorker:
 
                         try:
                             subscription_success = await self.handle_subscription_requirement(client, channel_info)
-                            logger.info(f"📡 [{session_name}] Попытка #{attempt}: Подписка завершена: {subscription_success}")
+                            logger.info(f"📡 [{session_name}] Попытка #{attempt}: Обработка завершена: {subscription_success}")
 
                             if subscription_success:
-                                logger.info(f"📡 [{session_name}] Попытка #{attempt}: Жду 5 секунд для применения подписки...")
+                                logger.info(f"📡 [{session_name}] Попытка #{attempt}: Жду 5 секунд для применения изменений...")
                                 await asyncio.sleep(5)
-                                logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после подписки...")
+                                logger.info(f"🎰 [{session_name}] Попытка #{attempt}: Повторяю спин после обработки требования...")
                                 spin_success, spin_message, reward = await api.perform_spin()
                                 logger.info(f"📊 [{session_name}] Попытка #{attempt} результат: success={spin_success}, message='{spin_message}', reward={reward}")
                                 handled = True
                             else:
-                                logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось подписаться на канал @{channel_username}")
+                                logger.error(f"❌ [{session_name}] Попытка #{attempt}: Не удалось обработать требование")
                         except Exception as e:
-                            logger.error(f"❌ [{session_name}] Ошибка при попытке подписки: {e}")
+                            logger.error(f"❌ [{session_name}] Ошибка при обработке требования: {e}")
                             import traceback
                             logger.error(f"   Traceback: {traceback.format_exc()}")
                     else:
