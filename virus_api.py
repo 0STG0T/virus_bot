@@ -814,15 +814,16 @@ class VirusAPI:
         """
         ТОЛЬКО ПРОВЕРЯЕТ нужна ли активация звезд, БЕЗ САМОЙ АКТИВАЦИИ
 
-        Логика:
-        - Копим 200⭐ в инвентаре
-        - Когда >= 200⭐ в инвентаре → активируем ВСЕ
+        НОВАЯ Логика:
+        - Проверяем СУММУ: баланс + инвентарь
+        - Если СУММА >= 200⭐ → активируем ЧАСТИЧНО до баланса 200-220⭐
         - Делаем платный спин
-        - Повторяем с 0
+        - Повторяем
 
-        Возвращает: (нужна_активация, активных_звезд_на_балансе, неактивированных_в_инвентаре, можно_активировать, причина)
+        Возвращает: (нужна_активация, активных_звезд_на_балансе, неактивированных_в_инвентаре, сколько_активировать, причина)
         """
         PAID_SPIN_COST = 200  # Стоимость платного спина
+        TARGET_BALANCE = 220  # Целевой баланс после активации (запас)
 
         try:
             # Получаем текущий баланс активированных звезд
@@ -868,19 +869,24 @@ class VirusAPI:
                 if not cursor:
                     break
 
-            # Проверяем: уже есть >= 200⭐ на балансе?
+            # Проверка 1: Уже есть >= 200⭐ на балансе?
             if stars_balance >= PAID_SPIN_COST:
-                reason = f"баланс уже {stars_balance}⭐ >= {PAID_SPIN_COST}⭐"
+                reason = f"баланс уже {stars_balance}⭐ >= {PAID_SPIN_COST}⭐ (готов к платному спину)"
                 return False, stars_balance, inventory_stars_value, 0, reason
 
-            # Проверяем: есть >= 200⭐ в инвентаре?
-            if inventory_stars_value < PAID_SPIN_COST:
-                reason = f"в инвентаре {inventory_stars_value}⭐ < {PAID_SPIN_COST}⭐"
+            # Проверка 2: Проверяем СУММУ (баланс + инвентарь)
+            total_stars = stars_balance + inventory_stars_value
+
+            if total_stars < PAID_SPIN_COST:
+                reason = f"СУММА {total_stars}⭐ (баланс {stars_balance}⭐ + инвентарь {inventory_stars_value}⭐) < {PAID_SPIN_COST}⭐"
                 return False, stars_balance, inventory_stars_value, 0, reason
 
-            # Активируем ВСЕ звезды из инвентаря
-            reason = f"в инвентаре {inventory_stars_value}⭐ >= {PAID_SPIN_COST}⭐, активируем ВСЕ"
-            return True, stars_balance, inventory_stars_value, inventory_stars_value, reason
+            # СУММА >= 200⭐! Активируем ЧАСТИЧНО до баланса 200-220⭐
+            needed_stars = PAID_SPIN_COST - stars_balance  # Минимум нужно
+            target_activation = min(TARGET_BALANCE - stars_balance, inventory_stars_value)  # Активируем до 220 (или сколько есть)
+
+            reason = f"СУММА {total_stars}⭐ >= {PAID_SPIN_COST}⭐, активируем {target_activation}⭐ из инвентаря (баланс {stars_balance}⭐ → ~{stars_balance + target_activation}⭐)"
+            return True, stars_balance, inventory_stars_value, target_activation, reason
 
         except Exception as e:
             logger.error(f"Ошибка проверки необходимости активации для {self.session_name}: {e}")
@@ -888,17 +894,18 @@ class VirusAPI:
 
     async def activate_all_stars(self) -> Tuple[int, int, int]:
         """
-        Активирует ВСЕ звезды из инвентаря для платного спина.
+        Активирует звезды из инвентаря ЧАСТИЧНО до баланса 200-220⭐.
 
-        Логика:
-        - Копим 200⭐ в инвентаре
-        - Когда >= 200⭐ → активируем ВСЕ звезды
+        НОВАЯ Логика:
+        - Проверяем СУММУ: баланс + инвентарь
+        - Если СУММА >= 200⭐ → активируем ЧАСТИЧНО до баланса 200-220⭐
         - Делаем платный спин
-        - Повторяем с 0
+        - Повторяем
 
         Возвращает: (активировано_штук, всего_найдено_штук, активировано_значение_звезд)
         """
         PAID_SPIN_COST = 200  # Стоимость платного спина
+        TARGET_BALANCE = 220  # Целевой баланс после активации
 
         activated_count = 0
         total_stars_found = 0
@@ -968,26 +975,34 @@ class VirusAPI:
             logger.error(f"Ошибка при сканировании инвентаря для {self.session_name}: {e}")
             return 0, 0, 0
 
-        # ЭТАП 2: Проверяем условия и активируем ВСЕ
-        logger.info(f"📊 {self.session_name}: баланс {current_balance}⭐, инвентарь {total_stars_value}⭐")
+        # ЭТАП 2: Проверяем условия и активируем ЧАСТИЧНО
+        total_available = current_balance + total_stars_value
+        logger.info(f"📊 {self.session_name}: баланс {current_balance}⭐, инвентарь {total_stars_value}⭐, СУММА {total_available}⭐")
 
-        # Проверка 1: Уже есть 200⭐ на балансе?
+        # Проверка 1: Уже есть >= 200⭐ на балансе?
         if current_balance >= PAID_SPIN_COST:
             logger.info(f"⏸️ {self.session_name}: баланс уже {current_balance}⭐ >= 200⭐, активация не нужна")
             return 0, total_stars_found, 0
 
-        # Проверка 2: Есть >= 200⭐ в инвентаре?
-        if total_stars_value < PAID_SPIN_COST:
-            logger.info(f"⏸️ {self.session_name}: инвентарь {total_stars_value}⭐ < 200⭐, продолжаем копить")
+        # Проверка 2: СУММА >= 200⭐?
+        if total_available < PAID_SPIN_COST:
+            logger.info(f"⏸️ {self.session_name}: СУММА {total_available}⭐ < 200⭐, продолжаем копить")
             return 0, total_stars_found, 0
 
-        # Активируем ВСЕ звезды!
-        logger.info(f"✅ {self.session_name}: инвентарь {total_stars_value}⭐ >= 200⭐, активирую ВСЕ звезды!")
+        # СУММА >= 200⭐! Активируем ЧАСТИЧНО до баланса 200-220⭐
+        target_stars_needed = min(TARGET_BALANCE - current_balance, total_stars_value)
+        logger.info(f"✅ {self.session_name}: СУММА {total_available}⭐ >= 200⭐, активирую ~{target_stars_needed}⭐ до баланса ~{current_balance + target_stars_needed}⭐")
 
         activated_value = 0
+        current_activated_balance = current_balance  # Трекаем текущий баланс
 
         try:
             for star_item in stars_to_activate:
+                # Проверяем: уже достигли целевого баланса?
+                if current_activated_balance >= TARGET_BALANCE:
+                    logger.info(f"🎯 {self.session_name}: Достигли целевого баланса {current_activated_balance}⭐ >= {TARGET_BALANCE}⭐, останавливаем активацию")
+                    break
+
                 user_roulette_prize_id = star_item['id']
                 star_name = star_item['name']
                 star_value = star_item['value']
@@ -998,7 +1013,8 @@ class VirusAPI:
                     if success:
                         activated_count += 1
                         activated_value += star_value
-                        logger.info(f"✅ Активированы: {star_name} ({star_value}⭐) для {self.session_name}")
+                        current_activated_balance += star_value
+                        logger.info(f"✅ Активированы: {star_name} ({star_value}⭐) для {self.session_name}, баланс теперь ~{current_activated_balance}⭐")
                     else:
                         logger.warning(f"⚠️ Не удалось активировать {star_name} для {self.session_name}: {message}")
 

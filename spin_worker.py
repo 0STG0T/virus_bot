@@ -43,6 +43,70 @@ class SpinWorker:
             logger.error(f"Ошибка выполнения предварительных условий для {session_name}: {e}")
             return False, f"Ошибка: {str(e)}"
 
+    async def cleanup_channel_subscriptions(self, client, session_name: str, max_channels: int = 100) -> Tuple[int, int]:
+        """Очищает подписки на каналы если их слишком много
+
+        Returns:
+            (total_channels, unsubscribed_count) - количество каналов до очистки и количество отписок
+        """
+        try:
+            logger.info(f"🧹 [{session_name}] Проверяю количество подписок на каналы...")
+
+            from telethon.tl.types import Channel
+            from telethon.tl.functions.channels import LeaveChannelRequest
+
+            # Получаем все диалоги
+            dialogs = await client.get_dialogs()
+
+            # Фильтруем только каналы (не супергруппы, не боты)
+            channels = []
+            for dialog in dialogs:
+                if isinstance(dialog.entity, Channel):
+                    # Проверяем что это канал, а не супергруппа
+                    if dialog.entity.broadcast:
+                        channels.append(dialog.entity)
+
+            total_channels = len(channels)
+            logger.info(f"📊 [{session_name}] Найдено каналов: {total_channels}")
+
+            if total_channels > max_channels:
+                logger.warning(f"⚠️ [{session_name}] Слишком много каналов ({total_channels} > {max_channels})")
+                logger.warning(f"🧹 [{session_name}] Начинаю массовую отписку от всех каналов...")
+
+                unsubscribed = 0
+
+                # Отписываемся ПАЧКАМИ для скорости
+                tasks = []
+                for i, channel in enumerate(channels):
+                    # Создаем задачу на отписку
+                    tasks.append(client(LeaveChannelRequest(channel)))
+
+                    # Выполняем пачками по 50 для максимальной скорости
+                    if len(tasks) >= 50 or i == len(channels) - 1:
+                        try:
+                            await asyncio.gather(*tasks, return_exceptions=True)
+                            unsubscribed += len(tasks)
+                            logger.info(f"🧹 [{session_name}] Отписался от {unsubscribed}/{total_channels} каналов...")
+                            tasks = []
+                            # Минимальная задержка между пачками
+                            if i < len(channels) - 1:
+                                await asyncio.sleep(0.1)
+                        except Exception as e:
+                            logger.warning(f"⚠️ [{session_name}] Ошибка при отписке пачки: {e}")
+                            tasks = []
+
+                logger.info(f"✅ [{session_name}] Отписался от {unsubscribed} каналов")
+                return total_channels, unsubscribed
+            else:
+                logger.info(f"✅ [{session_name}] Количество каналов в норме ({total_channels} <= {max_channels})")
+                return total_channels, 0
+
+        except Exception as e:
+            logger.error(f"❌ [{session_name}] Ошибка очистки подписок: {e}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            return 0, 0
+
     async def handle_subscription_requirement(self, client, channel_info: Dict) -> bool:
         """Обрабатывает требование подписки на канал - пробует ВСЕ возможные методы"""
         try:
@@ -64,8 +128,21 @@ class SpinWorker:
 
                     if isinstance(entity, Channel):
                         await client(JoinChannelRequest(entity))
-                        logger.info(f"✅ Метод 1: Успешно подписался на канал @{clean_username}")
-                        any_success = True
+                        logger.info(f"✅ Метод 1: Команда подписки отправлена на канал @{clean_username}")
+
+                        # Проверяем что подписка прошла успешно
+                        await asyncio.sleep(1)
+                        try:
+                            # Получаем информацию о канале снова
+                            updated_entity = await client.get_entity(f"@{clean_username}")
+                            # Если мы можем получить entity - значит подписка успешна
+                            logger.info(f"✅ Метод 1: Подписка подтверждена для @{clean_username}")
+                            any_success = True
+                        except Exception as verify_error:
+                            logger.warning(f"⚠️ Метод 1: Не удалось проверить подписку: {verify_error}")
+                            # Все равно считаем успехом если команда прошла
+                            any_success = True
+
                         await asyncio.sleep(2)
                     elif isinstance(entity, User):
                         logger.info(f"ℹ️ Метод 1: @{clean_username} - это бот/пользователь, пробую запустить...")
@@ -193,29 +270,38 @@ class SpinWorker:
             api = VirusAPI(session_name)
             await api.set_auth_data(auth_data)
 
+            # Проверяем и очищаем подписки на каналы если их слишком много
+            try:
+                total_channels, unsubscribed = await self.cleanup_channel_subscriptions(client, session_name, max_channels=100)
+                if unsubscribed > 0:
+                    logger.info(f"🧹 [{session_name}] Освобождено мест для новых подписок: {unsubscribed}")
+            except Exception as cleanup_error:
+                logger.warning(f"⚠️ [{session_name}] Не удалось очистить подписки: {cleanup_error}")
+                # Продолжаем работу даже если очистка не удалась
+
             can_spin, reason = await api.check_spin_availability()
             if not can_spin:
-                if "24 часа" in reason:
-                    result['message'] = 'нельзя сделать фри спин так как с прошлого не прошло 24 часа'
-                elif "рефки" in reason or "подписки" in reason:
-                    prerequisites_ok, _ = await self.complete_prerequisites(api, session_name, client)
-                    if not prerequisites_ok:
-                        result['message'] = f'нельзя сделать фри спин так как не выполнены какие либо условия ({reason})'
-                        await api.close_session()
-                        await client.disconnect()
-                        return result
+                # Просто выводим ошибку от API как есть
+                result['message'] = reason
 
-                    can_spin, reason = await api.check_spin_availability()
-                    if not can_spin:
-                        result['message'] = f'нельзя сделать фри спин ({reason})'
-                        await api.close_session()
-                        await client.disconnect()
-                        return result
-                else:
-                    result['message'] = f'нельзя сделать фри спин ({reason})'
-                    await api.close_session()
-                    await client.disconnect()
-                    return result
+                # Проверяем активацию звезд даже если не можем сделать спин
+                try:
+                    activated_count, total_found, stars_value = await api.activate_all_stars()
+                    if activated_count > 0:
+                        logger.info(f"✅ Активировано {activated_count} звезд (~{stars_value}⭐) для {session_name}")
+                        result['stars_activated'] = activated_count
+
+                        # Делаем платный спин БЕЗ индивидуального уведомления (обычный perform_spin когда баланс >= 200⭐)
+                        paid_spin_success, paid_spin_message, paid_spin_reward = await api.perform_spin()
+                        if paid_spin_success:
+                            result['auto_paid_spin'] = True
+                            result['auto_paid_spin_reward'] = paid_spin_reward
+                except Exception as e:
+                    logger.error(f"Ошибка активации звезд для {session_name}: {e}")
+
+                await api.close_session()
+                await client.disconnect()
+                return result
 
             # === ОСНОВНАЯ ЛОГИКА ФРИ СПИНА ===
             logger.info(f"🎰 [{session_name}] === НАЧАЛО ПРОЦЕССА ФРИ СПИНА ===")
@@ -467,7 +553,37 @@ class SpinWorker:
             if not spin_success:
                 logger.error(f"❌ [{session_name}] === ФИНАЛ: Спин неуспешен после {attempt} попыток ===")
                 logger.error(f"❌ [{session_name}] Финальная ошибка: '{spin_message}'")
-                result['message'] = f'нельзя сделать фри спин ({spin_message})'
+                result['message'] = spin_message
+
+                # ВАЖНО: Проверяем активацию звезд ДАЖЕ при ошибке фри спина!
+                logger.info(f"🔍 [{session_name}] Проверяю активацию звезд несмотря на ошибку фри спина...")
+                try:
+                    should_activate, balance_stars, inventory_stars, can_activate, reason = await api.should_activate_stars()
+                    if should_activate:
+                        logger.info(f"✅ [{session_name}] АКТИВАЦИЯ НУЖНА (при ошибке): баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
+                    else:
+                        logger.info(f"⏸️ [{session_name}] АКТИВАЦИЯ НЕ НУЖНА (при ошибке): баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
+
+                    # Активируем звезды даже если спин неудачен
+                    activated_count, total_found, stars_value = await api.activate_all_stars()
+                    if activated_count > 0:
+                        logger.info(f"✅ Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name} (при ошибке)")
+                        result['stars_activated'] = activated_count
+                        result['stars_value_activated'] = stars_value
+
+                        # Делаем платный спин БЕЗ индивидуального уведомления (обычный perform_spin когда баланс >= 200⭐)
+                        try:
+                            paid_spin_success, paid_spin_message, paid_spin_reward = await api.perform_spin()
+                            if paid_spin_success:
+                                logger.info(f"✅ Автоплатный спин {session_name}: {paid_spin_message}")
+                                result['auto_paid_spin'] = True
+                                result['auto_paid_spin_reward'] = paid_spin_reward
+                        except Exception as e:
+                            logger.error(f"Ошибка автоматического платного спина для {session_name}: {e}")
+
+                except Exception as e:
+                    logger.error(f"Ошибка проверки/активации звезд при ошибке для {session_name}: {e}")
+
                 await api.close_session()
                 await client.disconnect()
                 return result
@@ -514,29 +630,14 @@ class SpinWorker:
 
                     # НОВАЯ ЛОГИКА: Если активировали звезды (значит достигли 200⭐ на балансе)
                     # то сразу делаем автоматический платный спин
-                    logger.info(f"🎰 {session_name}: баланс достиг 200⭐, делаю автоматический платный спин...")
+                    logger.info(f"🎰 {session_name}: баланс достиг 200⭐+, делаю автоматический платный спин...")
 
-                    # Отправляем уведомление об активации
-                    if self.notification_callback:
-                        notification_text = f"💎 АКТИВАЦИЯ | {session_name}\n"
-                        notification_text += f"Активировано ВСЕ: {stars_value}⭐\n"
-                        notification_text += f"🎰 Автоматический платный спин..."
-                        await self.notification_callback(notification_text)
-
-                    # Делаем платный спин
+                    # Делаем платный спин БЕЗ индивидуального уведомления (обычный perform_spin когда баланс >= 200⭐)
                     try:
-                        paid_spin_success, paid_spin_message, paid_spin_reward = await api.perform_paid_spin()
+                        paid_spin_success, paid_spin_message, paid_spin_reward = await api.perform_spin()
 
                         if paid_spin_success:
                             logger.info(f"✅ Автоплатный спин {session_name}: {paid_spin_message}")
-
-                            # Отправляем уведомление о результате платного спина
-                            if self.notification_callback:
-                                if paid_spin_reward:
-                                    await self.notification_callback(
-                                        f"🎁 АВТО ПЛАТНЫЙ СПИН | {session_name} | {paid_spin_reward}"
-                                    )
-
                             result['auto_paid_spin'] = True
                             result['auto_paid_spin_reward'] = paid_spin_reward
                         else:
@@ -565,14 +666,14 @@ class SpinWorker:
                     logger.error(f"Ошибка автопродажи подарков после спина {session_name}: {e}")
 
             result['success'] = True
-            result['message'] = f'фри спин был успешен. выпало: {result["reward"] or "ничего"}'
+            result['message'] = result.get('reward') or 'OK'
 
             await api.close_session()
             await client.disconnect()
 
         except Exception as e:
             logger.error(f"Ошибка выполнения спина для {session_name}: {e}")
-            result['message'] = f'нельзя сделать фри спин (ошибка: {str(e)})'
+            result['message'] = str(e)
 
         return result
 
@@ -597,12 +698,13 @@ class SpinWorker:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         processed_results = []
+
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 processed_results.append({
                     'session_name': session_names[i],
                     'success': False,
-                    'message': f'Ошибка: {str(result)}',
+                    'message': str(result),
                     'reward': None,
                     'high_value_item': False,
                     'stars_activated': 0
@@ -747,161 +849,6 @@ class SpinWorker:
                 processed_results.append(result)
 
         return processed_results
-
-    async def perform_paid_spins_batch(self, session_names: List[str]) -> List[Dict]:
-        """Выполняет платные спины для аккаунтов с балансом >= 225 звезд"""
-        # Убираем семафор - все операции параллельно
-        results = []
-
-        async def paid_spin_without_limit(session_name: str):
-            
-                result = await self.perform_single_paid_spin(session_name)
-                await asyncio.sleep(DELAY_BETWEEN_ACCOUNTS)
-                return result
-
-        tasks = [paid_spin_without_limit(name) for name in session_names]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        processed_results = []
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                processed_results.append({
-                    'session_name': session_names[i],
-                    'success': False,
-                    'message': f'Ошибка: {str(result)}',
-                    'reward': None,
-                    'high_value_item': False,
-                    'stars_activated': 0
-                })
-            else:
-                processed_results.append(result)
-
-        return processed_results
-
-    async def perform_single_paid_spin(self, session_name: str) -> Dict[str, any]:
-        """Выполняет платный спин для одного аккаунта если баланс >= 225 звезд"""
-        result = {
-            'session_name': session_name,
-            'success': False,
-            'message': '',
-            'reward': None,
-            'high_value_item': False,
-            'stars_activated': 0
-        }
-
-        try:
-            # Простое ограничение частоты запросов
-            current_time = time.time()
-            if session_name in self.last_request_time:
-                time_diff = current_time - self.last_request_time[session_name]
-                if time_diff < self.min_request_interval:
-                    await asyncio.sleep(self.min_request_interval - time_diff)
-
-            self.last_request_time[session_name] = time.time()
-
-            client = await self.session_manager.create_client(session_name)
-            if not client:
-                result['message'] = 'Не удалось создать клиент'
-                return result
-
-            auth = WebAppAuth(client, session_name)
-            auth_data = await auth.get_webapp_data()
-
-            if not auth_data:
-                result['message'] = 'Не удалось получить данные авторизации'
-                await client.disconnect()
-                return result
-
-            api = VirusAPI(session_name)
-            await api.set_auth_data(auth_data)
-
-            # Проверяем баланс для платного спина
-            can_spin, reason = await api.can_perform_paid_spin(225)  # Требуем 225 звезд для страховки
-            if not can_spin:
-                result['message'] = f'пропущен - {reason}'
-                await api.close_session()
-                await client.disconnect()
-                return result
-
-            # Пытаемся сделать платный спин
-            # Попробуем разные типы спинов
-            for spin_type in ["PAID", "X200", "PREMIUM"]:
-                spin_success, spin_message, reward = await api.perform_paid_spin(spin_type)
-                if spin_success:
-                    break
-                # Если первый тип не сработал, логируем и пробуем следующий
-                logger.debug(f"Не удалось сделать платный спин типа {spin_type} для {session_name}: {spin_message}")
-
-            if not spin_success:
-                result['message'] = f'не удалось сделать платный спин ({spin_message})'
-                await api.close_session()
-                await client.disconnect()
-                return result
-
-            if reward:
-                _, reward_desc, high_value, is_gift = await api.process_reward(reward)
-                result['reward'] = reward_desc
-                result['high_value_item'] = high_value
-
-                # Уведомляем о всех подарках с платных спинов в формате: сессия - подарок - ценность
-                if is_gift and self.notification_callback:
-                    # Извлекаем стоимость подарка из reward
-                    exchange_price = reward.get('exchangePrice', 0)
-                    gift_name = reward.get('name', 'Неизвестный подарок')
-
-                    if high_value:
-                        await self.notification_callback(
-                            f"💎 ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
-                        )
-                    else:
-                        await self.notification_callback(
-                            f"🎁 ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
-                        )
-
-            # Проверяем и логируем решение об активации звезд
-            try:
-                should_activate, balance_stars, inventory_stars, can_activate, reason = await api.should_activate_stars()
-                if should_activate:
-                    logger.info(f"✅ [{session_name}] ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐, можно активировать ~{can_activate}⭐ ({reason})")
-                else:
-                    logger.info(f"⏸️ [{session_name}] ПЛАТНЫЙ СПИН - АКТИВАЦИЯ НЕ НУЖНА: баланс {balance_stars}⭐, инвентарь {inventory_stars}⭐ ({reason})")
-            except Exception as e:
-                logger.error(f"Ошибка проверки активации для {session_name}: {e}")
-
-            # Активируем все звезды из инвентаря после успешного платного спина
-            try:
-                activated_count, total_found, stars_value = await api.activate_all_stars()
-                if activated_count > 0:
-                    logger.info(f"✅ Активировано {activated_count} из {total_found} звезд (~{stars_value}⭐) для {session_name} (платный спин)")
-                    result['stars_activated'] = activated_count
-                    result['stars_value_activated'] = stars_value
-                elif total_found > 0:
-                    logger.info(f"⏸️ Найдено {total_found} звезд (~{stars_value}⭐), но активировано 0 для {session_name} (в инвентаре <= 100⭐)")
-            except Exception as e:
-                logger.error(f"Ошибка активации звезд после платного спина для {session_name}: {e}")
-
-            # Автоматическая продажа дешевых подарков после платного спина
-            if config.GIFT_EXCHANGE_AFTER_SPIN and config.AUTO_GIFT_EXCHANGE_ENABLED:
-                try:
-                    exchanged_count, total_gifts, exchanged_list = await api.auto_exchange_cheap_gifts()
-                    if exchanged_count > 0:
-                        logger.info(f"Автопродажа после платного спина {session_name}: продано {exchanged_count} из {total_gifts} подарков")
-                        result['gifts_exchanged'] = exchanged_count
-                        result['gifts_exchanged_list'] = exchanged_list
-                except Exception as e:
-                    logger.error(f"Ошибка автопродажи подарков после платного спина {session_name}: {e}")
-
-            result['success'] = True
-            result['message'] = f'платный спин успешен. выпало: {result["reward"] or "ничего"}'
-
-            await api.close_session()
-            await client.disconnect()
-
-        except Exception as e:
-            logger.error(f"Ошибка выполнения платного спина для {session_name}: {e}")
-            result['message'] = f'не удалось сделать платный спин (ошибка: {str(e)})'
-
-        return result
 
     async def prepare_all_accounts_batch(self) -> List[Dict]:
         """Проверяет и подготавливает все аккаунты (проходит onboarding)"""
@@ -1423,31 +1370,23 @@ class SpinWorker:
                 await client.disconnect()
                 return result
 
-            # Выполняем платный спин (тип "PAID" стоит 200 звезд)
-            spin_success, spin_message, prize = await api.perform_paid_spin("PAID")
+            # Выполняем обычный спин (API автоматически делает платный если баланс >= 200⭐)
+            spin_success, spin_message, prize = await api.perform_spin()
+
+            if not spin_success:
+                result['message'] = spin_message
+                await api.close_session()
+                await client.disconnect()
+                return result
 
             if spin_success and prize:
                 # Обрабатываем полученный приз
                 is_processed, prize_description, is_high_value, is_gift = await api.process_reward(prize)
 
                 result['success'] = True
-                result['message'] = f"Получил {prize.get('name', 'приз')}"
+                result['message'] = prize.get('name', 'OK')
                 result['prize_name'] = prize.get('name', '')
                 result['high_value_prize'] = is_high_value
-
-                # Уведомляем о подарках с автоматических платных спинов в формате: сессия - подарок - ценность
-                if is_gift and self.notification_callback:
-                    exchange_price = prize.get('exchangePrice', 0)
-                    gift_name = prize.get('name', 'Неизвестный подарок')
-
-                    if is_high_value:
-                        await self.notification_callback(
-                            f"💎 АВТО ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
-                        )
-                    else:
-                        await self.notification_callback(
-                            f"🎁 АВТО ПЛАТНЫЙ СПИН | {session_name} | {gift_name} | {exchange_price}⭐"
-                        )
 
                 # Проверяем и логируем решение об активации звезд
                 try:
@@ -1464,15 +1403,10 @@ class SpinWorker:
                 result['stars_activated'] = activated_stars
                 result['stars_value_activated'] = stars_value
 
-                if activated_stars > 0:
-                    result['message'] += f" (активировано {activated_stars} звезд на сумму ~{stars_value}⭐)"
-                elif total_found > 0:
-                    result['message'] += f" (найдено {total_found} звезд на сумму ~{stars_value}⭐, но не активировано - в инвентаре <= 100⭐)"
-
                 logger.info(f"✅ Платный спин {session_name}: {result['message']}")
 
             else:
-                result['message'] = f'Спин неудачен: {spin_message}'
+                result['message'] = spin_message
                 logger.warning(f"❌ Платный спин {session_name}: {spin_message}")
 
             await api.close_session()
@@ -1480,6 +1414,6 @@ class SpinWorker:
 
         except Exception as e:
             logger.error(f"Ошибка платного спина {session_name}: {e}")
-            result['message'] = f'Ошибка: {str(e)}'
+            result['message'] = str(e)
 
         return result

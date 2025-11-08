@@ -535,6 +535,57 @@ class VirusBotManager:
             # Выполняем операцию с прогресс колбэком
             if action == "spin":
                 results = await self.spin_worker.perform_spins_batch(session_names, progress_callback)
+
+                # ПОСЛЕ фри спинов проверяем баланс и делаем платные спины
+                try:
+                    await query.edit_message_text(
+                        f"✅ Фри спины завершены\n\n🔍 Проверяю балансы для платных спинов...",
+                        reply_markup=cancel_keyboard
+                    )
+
+                    # Получаем балансы всех аккаунтов
+                    balances = await self.spin_worker.get_all_balances()
+
+                    # Фильтруем аккаунты с балансом >= 200 звезд
+                    accounts_for_paid_spins = [
+                        session_name for session_name, balance in balances
+                        if balance >= 200
+                    ]
+
+                    if accounts_for_paid_spins:
+                        await query.edit_message_text(
+                            f"✅ Фри спины завершены\n\n🎰 Делаю платные спины на {len(accounts_for_paid_spins)} аккаунтах...",
+                            reply_markup=cancel_keyboard
+                        )
+
+                        # Делаем платные спины
+                        paid_results = await self.spin_worker.perform_paid_spins_batch(accounts_for_paid_spins)
+
+                        # Подсчитываем успешные и собираем информацию о подарках
+                        successful_paid = 0
+                        high_value_prizes = []
+
+                        for r in paid_results:
+                            if r.get('success', False):
+                                successful_paid += 1
+                                # Собираем информацию о ценных подарках
+                                if r.get('high_value_prize', False):
+                                    prize_name = r.get('prize_name', 'Неизвестный подарок')
+                                    session_name = r.get('session_name', '')
+                                    high_value_prizes.append(f"{session_name}: {prize_name}")
+
+                        # Отправляем уведомление
+                        if successful_paid > 0:
+                            notification = f"🎰 Автоматически сделано платных спинов: {successful_paid} из {len(accounts_for_paid_spins)} аккаунтов"
+
+                            # Добавляем информацию о ценных подарках если есть
+                            if high_value_prizes:
+                                notification += f"\n\n💎 Ценные подарки:\n" + "\n".join(high_value_prizes)
+
+                            await self.send_notification(notification)
+                except Exception as e:
+                    logger.error(f"Ошибка при автоматических платных спинах: {e}")
+
             elif action == "validate":
                 results = await self.spin_worker.validate_all_accounts_batch(session_names, progress_callback)
             elif action == "balance":
